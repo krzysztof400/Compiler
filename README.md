@@ -3,6 +3,9 @@
 ## Project Description
 This project is a compiler for a simple imperative programming language. The compiler translates source code written in a defined high-level language (supporting procedures, FOR/WHILE/REPEAT loops, conditional statements, and arrays) into assembly code for a specific Virtual Machine (VM).
 
+Specifacation of language can be found in [language_spec](language_spec.md)
+Specification of VM can be found in [vm_spec](vm_spec.md)
+
 ## Implementation Details
 The compiler operates in several phases:
 ### 1. Lexical Analysis (Lexer): Source code is divided into tokens (keywords, identifiers, numbers).
