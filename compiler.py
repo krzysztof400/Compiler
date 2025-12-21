@@ -9,25 +9,34 @@ if __name__ == '__main__':
 
     parser.debugfile = 'parser_debug.out'
     
-    input_file = sys.argv[1]
-    output_file = sys.argv[2]
+    args = sys.argv[1:]
+    verbose = False
+    if "-v" in args:
+        verbose = True
+        parser.verbose = True
+        args.remove("-v")
+    
+    if len(args) != 2:
+        print("Usage: python compiler.py <inputfile> <outputfile> [-v]")
+        sys.exit(1)
+    
+    input_file = args[0]
+    output_file = args[1]
     
     with open(input_file, 'r') as f:
         text = f.read()
     
-    tokens = list(lexer.tokenize(text)) #TODO: remove list and then prints below, and iter in tokens for production
+    if verbose:
+        print("Tokens:")
+        for token in lexer.tokenize(text):
+            print(token)
 
-    print("Tokens:")
+    ast = parser.parse(lexer.tokenize(text))
 
-    for token in tokens:
-        print(token)
-
-    print("\n\nAST:")
-
-    ast = parser.parse(iter(tokens))
-
-    pp = pprint.PrettyPrinter(indent=4)
-    pp.pprint(ast)
+    if verbose:
+        print("\n\nAST:")
+        pp = pprint.PrettyPrinter(indent=4)
+        pp.pprint(ast)
     
     # TODO: Run Semantic Analysis on ast
     # TODO: Run Code Generator on ast -> returns list of strings (ASM commands)
