@@ -85,6 +85,7 @@ class MyParser(Parser):
     def error(self, p):
         if p:
             print(f"Syntax error at token {p.type}, line {p.lineno}, value {p.value}")
-            self.errok()
+            exit(1)
         else:
             print("ERRORROROROR: EOF")
+            exit(1)
