@@ -1,0 +1,12 @@
+PROCEDURE p(a) IS
+IN
+  tmp := a + 1;
+  WRITE tmp;
+END
+
+PROGRAM IS
+  x
+IN
+  x := 3;
+  p(x);
+END

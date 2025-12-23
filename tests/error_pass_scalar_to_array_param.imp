@@ -1,0 +1,11 @@
+PROCEDURE takesArray(T arr) IS
+IN
+  WRITE 0;
+END
+
+PROGRAM IS
+  x
+IN
+  x := 7;
+  takesArray(x);
+END

@@ -1,0 +1,7 @@
+PROGRAM IS
+  i
+IN
+  FOR i FROM 1 TO 5 DO
+    i := i + 1;
+  ENDFOR
+END

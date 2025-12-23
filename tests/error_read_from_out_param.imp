@@ -1,0 +1,11 @@
+PROCEDURE badOut(O out) IS
+IN
+  WRITE out;
+  out := 1;
+END
+
+PROGRAM IS
+  x
+IN
+  badOut(x);
+END

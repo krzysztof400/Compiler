@@ -2,6 +2,7 @@ import sys
 import pprint
 from my_lexer import MyLexer
 from my_parser import MyParser
+from semantic_analyzer import SemanticAnalyzer
 
 if __name__ == '__main__':
     lexer = MyLexer()
@@ -38,6 +39,8 @@ if __name__ == '__main__':
         pp = pprint.PrettyPrinter(indent=4)
         pp.pprint(ast)
     
+    analyzer = SemanticAnalyzer()
+    analyzer.analyze(ast)
     # TODO: Run Semantic Analysis on ast
     # TODO: Run Code Generator on ast -> returns list of strings (ASM commands)
     

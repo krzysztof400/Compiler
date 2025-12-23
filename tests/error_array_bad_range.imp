@@ -1,0 +1,5 @@
+PROGRAM IS
+  tab[10:3]
+IN
+  WRITE 0;
+END

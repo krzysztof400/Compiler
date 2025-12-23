@@ -1,0 +1,16 @@
+PROCEDURE first(a) IS
+IN
+  second(a);
+END
+
+PROCEDURE second(a) IS
+IN
+  a := a + 1;
+END
+
+PROGRAM IS
+  x
+IN
+  x := 1;
+  first(x);
+END

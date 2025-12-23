@@ -1,0 +1,5 @@
+PROGRAM IS
+IN
+  x := 5;
+  WRITE x;
+END

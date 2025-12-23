@@ -1,0 +1,11 @@
+PROCEDURE bump(I n) IS
+IN
+  n := n + 1;
+END
+
+PROGRAM IS
+  x
+IN
+  x := 10;
+  bump(x);
+END
