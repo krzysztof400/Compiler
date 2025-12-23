@@ -3,6 +3,7 @@ import pprint
 from my_lexer import MyLexer
 from my_parser import MyParser
 from semantic_analyzer import SemanticAnalyzer
+from code_generator import CodeGenerator
 
 if __name__ == '__main__':
     lexer = MyLexer()
@@ -40,14 +41,12 @@ if __name__ == '__main__':
         pp.pprint(ast)
     
     analyzer = SemanticAnalyzer()
-    analyzer.analyze(ast)
-    # TODO: Run Semantic Analysis on ast
-    # TODO: Run Code Generator on ast -> returns list of strings (ASM commands)
     
     ast = parser.parse(lexer.tokenize(text))
     if ast:
-        # TODO: code generation
-        # generated_code = generate_code(ast)
+        analyzer.analyze(ast)
+        generator = CodeGenerator(analyzer)
+        generated_code = generator.generate(ast)
         with open(output_file, 'w') as f:
             f.write("\n".join(generated_code))
     else:
