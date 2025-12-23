@@ -22,7 +22,7 @@ def run_one(inp: Path, outdir: Path, uv: bool) -> int:
     outdir.mkdir(parents=True, exist_ok=True)
     outpath = outdir / f"{inp.stem}.out"
 
-    cmd = (["uv", "run", "python", "compiler.py"] if uv else [sys.executable, "compiler.py"])
+    cmd = (["uv", "run", "python", "./src/compiler.py"] if uv else [sys.executable, "./src/compiler.py"])
     cmd += [str(inp), str(outpath)]
 
     print(f"\n=== {inp} ===")
