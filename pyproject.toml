@@ -7,3 +7,21 @@ requires-python = ">=3.11"
 dependencies = [
     "sly>=0.5",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# Make failures easy to pinpoint (test id includes fixture filename).
+# -ra: show summary for all outcomes
+# --tb=short: compact tracebacks but keeps file/line info
+# --showlocals: helpful context when assertions fail
+# --maxfail=1: stop at first failure (tweak as you like)
+addopts = "-ra --tb=no --capture=tee-sys"
+
+# Ensure pytest can import project modules from repo root when needed.
+pythonpath = ["."]

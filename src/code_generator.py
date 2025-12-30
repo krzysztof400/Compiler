@@ -252,6 +252,71 @@ class CodeGenerator:
             self.emit("SWP e") # a = value
             self.emit("RSTORE b")
 
+    def gen_proc_call(self, cmd):
+        # ('PROC_CALL', proc_name, [arg1, arg2, ...])
+        proc_name = cmd[1]
+        arg_names = cmd[2]
+
+        if proc_name not in self.analyzer.procedures:
+            raise Exception(f"Error: Call to undefined procedure '{proc_name}'")
+
+        proc_def = self.analyzer.procedures[proc_name]
+        def_args = proc_def.args
+
+        if len(arg_names) != len(def_args):
+            raise Exception(
+                f"Error: Procedure '{proc_name}' expects {len(def_args)} arguments, got {len(arg_names)}"
+            )
+
+        # Convention used by this compiler:
+        # - Formal parameters were allocated as memory cells in the procedure scope
+        #   (via SemanticAnalyzer.declare_variable during visit_procedure).
+        # - Each formal parameter cell stores the ADDRESS of the actual argument.
+        # - For scalar args: address of the variable cell.
+        # - For array args: address of the first cell of the array.
+        # - For actual arguments that are themselves references (params in caller),
+        #   we must load the pointer stored in their cell.
+        #
+        # Therefore, at call site we write into each callee param cell.
+        for (def_arg, actual_name) in zip(def_args, arg_names):
+            def_type, def_name = def_arg[0], def_arg[1]
+
+            # Locate where to store this pointer in callee scope
+            callee_param_sym = self.analyzer.scopes[proc_name][def_name]
+
+            # Locate actual argument symbol in caller scope/global
+            actual_sym = self.analyzer.get_symbol(actual_name)
+
+            if def_type == 'ARG_ARRAY':
+                # Expect array
+                if not actual_sym.is_array:
+                    raise Exception(
+                        f"Error: Procedure '{proc_name}' expects array argument '{def_name}', got '{actual_name}'"
+                    )
+                # Address of array base is its mem_offset.
+                # If the array is passed as reference (param), load the pointer first.
+                if getattr(actual_sym, 'is_reference', False):
+                    self.emit(f"LOAD {actual_sym.mem_offset}")
+                else:
+                    self.gen_constant(actual_sym.mem_offset)
+
+            else:
+                # Expect scalar variable
+                if actual_sym.is_array:
+                    raise Exception(
+                        f"Error: Procedure '{proc_name}' expects scalar argument '{def_name}', got array '{actual_name}'"
+                    )
+                if getattr(actual_sym, 'is_reference', False):
+                    # actual_sym.mem_offset points to a cell holding the real address
+                    self.emit(f"LOAD {actual_sym.mem_offset}")
+                else:
+                    self.gen_constant(actual_sym.mem_offset)
+
+            # Store computed address into callee parameter cell
+            self.emit(f"STORE {callee_param_sym.mem_offset}")
+
+        self.emit(f"CALL {proc_name}")
+
     # --- COMMAND GENERATORS ---
 
     def gen_assign(self, cmd):
@@ -410,51 +475,81 @@ class CodeGenerator:
         # Generates code that JUMPS to jump_target_if_false if condition is FALSE.
         
         op = node[0]
-        # Evaluate LHS -> b
+        # Parser/AST tag normalization
+        op_map = {
+            'EQUAL': 'EQ',
+            'NE': 'NEQ',
+            'NEQ': 'NEQ',
+            'LEQ': 'LE',
+            'GEQ': 'GE',
+            'LT': 'LT',
+            'GT': 'GT',
+            'LE': 'LE',
+            'GE': 'GE',
+            'EQ': 'EQ',
+        }
+        op = op_map.get(op, op)
+        # Evaluate LHS -> c, RHS -> d (preserved copies)
         self.gen_expression(node[1])
-        self.emit("SWP b")
-        
-        # Evaluate RHS -> a
+        self.emit("SWP c")
         self.gen_expression(node[2])
-        # Now: RHS in a, LHS in b.
-        
-        if op == 'EQ': # a == b
-            # False if a != b.
-            # a != b if (a-b)>0 OR (b-a)>0
-            # We want to jump if (a-b)>0 OR (b-a)>0
-            
-            # Logic:
-            # c = a - b
-            # d = b - a
-            # if c > 0 jump
-            # if d > 0 jump
-            
-            self.emit("SWP c") # c = a (RHS)
-            self.emit("SWP b") # b = c (RHS), c = b (LHS)
-            # a = c (LHS), b = RHS
-            
-            # Save copies
-            self.emit("SWP c") # c = LHS
-            self.emit("SWP d") # d = RHS
-            
-            # Calc LHS - RHS
-            self.emit("SWP c") # a = LHS
-            self.emit("SWP b") # b = d (RHS)
-            self.emit("SUB b") # LHS - RHS
+        self.emit("SWP d")
+
+        # Helper: compute (x - y) with x in reg_x, y in reg_y.
+        # We do: a = x; b = y; a = a - b
+        def sub_regs(reg_x, reg_y):
+            self.emit("RST a")
+            self.emit(f"ADD {reg_x}")
+            self.emit(f"SWP b")
+            self.emit("RST a")
+            self.emit(f"ADD {reg_y}")
+            self.emit("SUB b")
+
+        # Semantics: jump when condition is FALSE.
+        if op == 'EQ':
+            # False when c != d.
+            sub_regs('c', 'd')
+            self.emit(f"JPOS {jump_target_if_false}")  # c > d
+            sub_regs('d', 'c')
+            self.emit(f"JPOS {jump_target_if_false}")  # d > c
+
+        elif op == 'NEQ':
+            # False when c == d.
+            true_label = f"cond_neq_true_{id(node)}"
+            sub_regs('c', 'd')
+            self.emit(f"JPOS {true_label}")
+            sub_regs('d', 'c')
+            self.emit(f"JPOS {true_label}")
+            # equal => false
+            self.emit(f"JUMP {jump_target_if_false}")
+            self.emit(f"{true_label}:", label=True)
+
+        elif op == 'LT':
+            # c < d; false when c >= d.
+            # If c - d > 0 => c > d (false). If c - d == 0 => equal (false).
+            sub_regs('c', 'd')
             self.emit(f"JPOS {jump_target_if_false}")
-            
-            # Calc RHS - LHS
-            self.emit("SWP c") # a = LHS (destroyed? yes SUB destroys).
-            # Wait, registers are destructive.
-            # Need to restore.
-            # Optimized EQ check:
-            # LHS in b, RHS in a.
-            # Store to temps?
-            pass # (See full implementation below for cleaner logic)
-            
-            # Simple EQ check logic:
-            # result = (LHS-RHS) + (RHS-LHS). If result > 0, then !=.
-            # Jump if result > 0.
+            self.emit(f"JZERO {jump_target_if_false}")
+
+        elif op == 'GT':
+            # c > d; false when c <= d.
+            # If d - c > 0 => d > c (false). If d - c == 0 => equal (false).
+            sub_regs('d', 'c')
+            self.emit(f"JPOS {jump_target_if_false}")
+            self.emit(f"JZERO {jump_target_if_false}")
+
+        elif op == 'LE':
+            # c <= d; false when c > d.
+            sub_regs('c', 'd')
+            self.emit(f"JPOS {jump_target_if_false}")
+
+        elif op == 'GE':
+            # c >= d; false when c < d.
+            sub_regs('d', 'c')
+            self.emit(f"JPOS {jump_target_if_false}")
+
+        else:
+            raise Exception(f"Unknown condition op: {op}")
 
     # --- MATH HELPERS (Logarithmic) ---
     def gen_mul(self, node1, node2):
@@ -532,3 +627,137 @@ class CodeGenerator:
         
         self.emit("RST a")
         self.emit("ADD e") # result to a
+
+    def _gen_divmod(self, node1, node2, want_quotient: bool):
+        """Compute quotient or remainder of integer division in O(log a).
+
+        Contract:
+        - Inputs: expression nodes node1 (dividend), node2 (divisor)
+        - Output: result in r_a
+          - if want_quotient: floor(dividend/divisor)
+          - else: dividend % divisor
+        - Division by zero: returns 0 (both quotient and remainder)
+
+        Register plan (kept local to this routine):
+        - c: dividend (will be reduced)
+        - d: divisor
+        - e: quotient
+        - f: "current" divisor multiple (dv)
+        - g: "current" power-of-two multiple (pow)
+        - b: scratch
+        """
+
+        # Evaluate dividend/divisor
+        self.gen_expression(node1)
+        self.emit("SWP c")  # c = dividend
+        self.gen_expression(node2)
+        self.emit("SWP d")  # d = divisor
+
+        # If divisor == 0 => result 0
+        div_by_zero = f"divmod_div0_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
+        divmod_end = f"divmod_end_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
+        self.emit("RST a")
+        self.emit("ADD d")
+        self.emit(f"JZERO {div_by_zero}")
+
+        # quotient = 0
+        self.emit("RST e")
+
+        # Main loop: while dividend >= divisor
+        outer = f"divmod_outer_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
+        outer_end = f"divmod_outer_end_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
+        self.emit(f"{outer}:", label=True)
+
+        # if (dividend - divisor) == 0? continue; if >0 continue; if <0 (i.e. dividend < divisor) stop
+        self.emit("RST a")
+        self.emit("ADD c")
+        self.emit("SUB d")
+        self.emit(f"JZERO {outer_end}")  # dividend == divisor => one last iteration handled below
+        self.emit(f"JPOS {outer}_cont")  # dividend > divisor
+        self.emit(f"JUMP {outer_end}")   # dividend < divisor
+        self.emit(f"{outer}_cont:", label=True)
+
+        # Setup dv = divisor, pow = 1
+        self.emit("RST a")
+        self.emit("ADD d")
+        self.emit("SWP f")  # f = dv
+        self.emit("RST g")
+        self.emit("INC g")  # g = pow
+
+        # Find the largest dv <= dividend by doubling.
+        # We keep doubling while (dividend - (dv*2)) >= 0.
+        grow = f"divmod_grow_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
+        grow_end = f"divmod_grow_end_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
+        self.emit(f"{grow}:", label=True)
+        # b = dv*2
+        self.emit("RST a")
+        self.emit("ADD f")
+        self.emit("SHL a")
+        self.emit("SWP b")
+        # if dividend - b >= 0 then we can grow
+        self.emit("RST a")
+        self.emit("ADD c")
+        self.emit("SUB b")
+        self.emit(f"JPOS {grow}_do")
+        self.emit(f"JZERO {grow}_do")
+        self.emit(f"JUMP {grow_end}")
+        self.emit(f"{grow}_do:", label=True)
+        # dv = dv*2, pow = pow*2
+        self.emit("RST a")
+        self.emit("ADD b")
+        self.emit("SWP f")
+        self.emit("SHL g")
+        self.emit(f"JUMP {grow}")
+        self.emit(f"{grow_end}:", label=True)
+
+        # Subtract dv from dividend and add pow to quotient
+        self.emit("RST a")
+        self.emit("ADD c")
+        self.emit("SUB f")
+        self.emit("SWP c")  # c = dividend - dv
+
+        self.emit("RST a")
+        self.emit("ADD e")
+        self.emit("ADD g")
+        self.emit("SWP e")  # e += pow
+
+        # Loop again
+        self.emit(f"JUMP {outer}")
+
+        # Handle dividend == divisor case (one last subtraction)
+        self.emit(f"{outer_end}:", label=True)
+        # If dividend == divisor, then quotient++ and remainder becomes 0
+        self.emit("RST a")
+        self.emit("ADD c")
+        self.emit("SUB d")
+        done_label = f"divmod_done_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
+        self.emit(f"JPOS {done_label}")
+        self.emit(f"JZERO {outer_end}_eq")
+        self.emit(f"JUMP {done_label}")
+        self.emit(f"{outer_end}_eq:", label=True)
+        # c = 0
+        self.emit("RST c")
+        # e = e + 1
+        self.emit("INC e")
+        self.emit(f"{done_label}:", label=True)
+
+        # Return selected result
+        if want_quotient:
+            self.emit("RST a")
+            self.emit("ADD e")
+        else:
+            self.emit("RST a")
+            self.emit("ADD c")
+        self.emit(f"JUMP {divmod_end}")
+
+        self.emit(f"{div_by_zero}:", label=True)
+        self.emit("RST a")
+        self.emit(f"{divmod_end}:", label=True)
+
+    def gen_div(self, node1, node2):
+        # a / b (floor), logarithmic time
+        self._gen_divmod(node1, node2, want_quotient=True)
+
+    def gen_mod(self, node1, node2):
+        # a % b, logarithmic time
+        self._gen_divmod(node1, node2, want_quotient=False)
