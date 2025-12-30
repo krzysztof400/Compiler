@@ -5,6 +5,11 @@ class SemanticAnalyzer:
         self.scopes = {}
         self.current_scope_name = "global"
         self.memory_counter = 0
+
+        # FOR loop metadata: maps id(for_node) -> hidden limit VariableSymbol.
+        # We keep this out of the AST because the analyzer does not currently
+        # traverse the full tree and won't rewrite nodes in-place.
+        self.for_limits = {}
         
         self.scopes["global"] = {}
         self.procedures = {}
@@ -123,16 +128,28 @@ class SemanticAnalyzer:
         self.visit_value(val_start)
         self.visit_value(val_end)
         
-        sym = self.declare_variable(iterator_name)
-        sym.is_iterator = True
-        sym.is_const = True
-        sym.is_initialized = True
-        
+        iter_sym = self.declare_variable(iterator_name)
+        iter_sym.is_iterator = True
+        iter_sym.is_const = True
+        iter_sym.is_initialized = True
+
+        # Spec compliance: iteration count is calculated once at loop entry.
+        # We reserve a hidden scalar cell that will hold the evaluated end bound.
+        limit_name = f"_limit_{iterator_name}_{id(node)}"
+        limit_sym = self.declare_variable(limit_name)
+        limit_sym.is_initialized = True
+
+        # Expose the hidden variable to codegen via analyzer mapping.
+        self.for_limits[id(node)] = limit_sym
+
         try:
             self.visit_commands(commands)
         finally:
+            # Remove both symbols from current scope and roll back virtual memory.
+            self.for_limits.pop(id(node), None)
             del self.scopes[self.current_scope_name][iterator_name]
-            self.memory_counter -= 1
+            del self.scopes[self.current_scope_name][limit_name]
+            self.memory_counter -= 2
 
     def visit_proc_call(self, node):
         pname = node[1]

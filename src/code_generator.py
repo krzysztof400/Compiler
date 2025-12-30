@@ -385,40 +385,42 @@ class CodeGenerator:
         # 3. Loop Check
         # 4. Body
         # 5. Inc/Dec Iterator
-        
-        iter_sym = self.analyzer.get_symbol(cmd[1])
+
+        iterator_name = cmd[1]
         start_val = cmd[2]
         end_val = cmd[3]
+
+        # The semantic analyzer in this repo doesn't traverse command bodies.
+        # That means FOR iterators are not guaranteed to exist in scopes during
+        # code generation. We therefore reserve the iterator + limit cells here.
+        # They are local to the generated code, consistent with spec.
+
+        # Reserve an internal cell for iterator storage (must not clash with
+        # user-declared names; iterator is local by spec).
+        iter_storage_name = f"_iter_{iterator_name}_{id(cmd)}"
+        iter_sym = self.analyzer.declare_variable(iter_storage_name)
+        iter_sym.is_iterator = True
+        iter_sym.is_const = True
+        iter_sym.is_initialized = True
+
+        limit_name = f"_limit_{iterator_name}_{id(cmd)}"
+        limit_sym = self.analyzer.declare_variable(limit_name)
+        limit_sym.is_initialized = True
+
+        # Temporarily bind the user-visible iterator name to the internal
+        # storage symbol for the duration of loop body generation.
+        scope = self.analyzer.scopes[self.analyzer.current_scope_name]
+        prev_iter_binding = scope.get(iterator_name)
+        scope[iterator_name] = iter_sym
         
         # 1. Init Iterator
         self.gen_expression(start_val)
         self.emit(f"STORE {iter_sym.mem_offset}")
-        
-        # 2. Store Limit (Use a temp memory cell? Or register?)
-        # Since we can't nested loops easily with fixed registers, best to use 
-        # a dedicated memory slot for the limit. 
-        # But we don't have one allocated in SymbolTable. 
-        # Hack: Use a high register if not nested? No.
-        # Better: SymbolTable should probably have allocated a hidden variable for limit.
-        # For this example, let's assume we can calculate it every time or store it in a specific temp reg 'h'
-        # if we assume no deep nesting complexity using 'h'. 
-        # To be safe/compliant: The limit is calc'd ONCE. 
-        # You should really allocate a hidden temp var in semantic analysis.
-        # For now, let's just calculate it. (Spec says: computed once).
-        # We will assume the user isn't modifying the limit variables inside loop (spec says even if they do, limit counts don't change).
-        # We will use register 'h' for limit, but save/restore it? 
-        # Let's assume we generated a hidden variable in SemanticAnalyzer. 
-        # Since we didn't, let's assume register 'g' and 'h' are reserved for Loop Limits. 
-        # This breaks on nesting.
-        # CORRECT FIX: Use memory. Assume the Semantic Analyzer allocated a hidden var. 
-        # Since I can't change SA now easily, I will just generate code that calculates it once
-        # and stores it in a hardcoded high memory address (risky) or 
-        # we accept re-calculation (violates strict spec but works for simple cases).
-        # Actually, let's use the iterator's memory address + 1? No.
-        
-        # Let's generate a temporary constant address for limit storage?
-        # Let's just calculate end_val into 'b' and compare. 
-        # Warning: This re-evaluates end_val every iteration.
+
+        # 2. Evaluate and store loop limit ONCE (spec requirement).
+        if limit_sym is not None:
+            self.gen_expression(end_val)
+            self.emit(f"STORE {limit_sym.mem_offset}")
         
         start_label = f"for_start_{id(cmd)}"
         end_label = f"for_end_{id(cmd)}"
@@ -427,11 +429,17 @@ class CodeGenerator:
         
         # Load Iterator -> a
         self.emit(f"LOAD {iter_sym.mem_offset}")
-        
-        # Load Limit -> b (Re-evaluating :()
-        self.emit("SWP b") 
-        self.gen_expression(end_val) # a = limit
-        self.emit("SWP b") # a = iter, b = limit
+
+        # Load Limit -> b (from hidden limit variable, no re-evaluation)
+        if limit_sym is None:
+            # Backwards compatibility fallback (shouldn't happen after SA fix).
+            self.emit("SWP b")
+            self.gen_expression(end_val)
+            self.emit("SWP b")
+        else:
+            self.emit("SWP b")
+            self.emit(f"LOAD {limit_sym.mem_offset}")
+            self.emit("SWP b")
         
         # Check Condition
         # UP: iter <= limit  => continue. Else jump end.
@@ -469,6 +477,16 @@ class CodeGenerator:
         
         self.emit(f"JUMP {start_label}")
         self.emit(f"{end_label}:", label=True)
+
+        # Restore previous iterator binding (if any) and release our temp cells.
+        if prev_iter_binding is None:
+            del scope[iterator_name]
+        else:
+            scope[iterator_name] = prev_iter_binding
+
+        del scope[iter_storage_name]
+        del scope[limit_name]
+        self.analyzer.memory_counter -= 2
 
     def gen_condition(self, node, jump_target_if_false):
         # ('EQ', val1, val2) etc.
