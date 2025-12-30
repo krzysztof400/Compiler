@@ -2,11 +2,21 @@ class CodeGenerator:
     def __init__(self, semantic_analyzer):
         self.analyzer = semantic_analyzer
         self.code = []
+
+        # One dedicated memory cell used as a pseudo "call stack" for return
+        # addresses. This compiler forbids recursion (per language spec), so
+        # a single slot is sufficient.
+        self._retaddr_mem = None
         
     def generate(self, ast):
         # AST: ('PROGRAM', procedures, main)
         _, procedures, main = ast
         
+        # Reserve a global cell for storing return addresses across CALL/RTRN.
+        # Must be reserved before generating any code so offsets are stable.
+        if self._retaddr_mem is None:
+            self._retaddr_mem = self.analyzer.declare_variable("_retaddr").mem_offset
+
         # 1. Jump over procedures to start of main
         self.emit("JUMP main_start")
         
@@ -51,10 +61,11 @@ class CodeGenerator:
             # Check for JUMP/JPOS/JZERO/CALL label
             parts = line.split()
             if len(parts) > 1 and parts[0].strip() in ["JUMP", "JZERO", "JPOS", "CALL"]:
+                op = parts[0].strip()
                 target = parts[1]
                 if target in label_map:
                     # Replace label with absolute line number
-                    final_output.append(f"{parts[0]} {label_map[target]}")
+                    final_output.append(f"{op} {label_map[target]}")
                 else:
                     # Keep as is (maybe it was already a number)
                     final_output.append(line.strip())
@@ -91,13 +102,22 @@ class CodeGenerator:
         # ('PROCEDURE', name, args, declarations, commands)
         proc_name = node[1]
         self.emit(f"{proc_name}:", label=True)
+
+        # CALL clobbers r_a with return address. We must save it immediately,
+        # because this compiler uses r_a for expression evaluation.
+        self.emit(f"STORE {self._retaddr_mem}")
         
-        # Parameters are already in memory (put there by CALLer).
-        # We just execute commands.
+        # Parameters and locals live in the procedure scope.
+        # Use SemanticAnalyzer scope so identifier->symbol resolution uses
+        # the correct memory offsets.
         self.analyzer.enter_scope(proc_name)
-        self.visit_commands(node[4])
-        self.analyzer.exit_scope()
-        
+        try:
+            self.visit_commands(node[4])
+        finally:
+            self.analyzer.exit_scope()
+
+        # Restore return address and return.
+        self.emit(f"LOAD {self._retaddr_mem}")
         self.emit("RTRN")
 
     def visit_main(self, node):
@@ -278,14 +298,33 @@ class CodeGenerator:
         #   we must load the pointer stored in their cell.
         #
         # Therefore, at call site we write into each callee param cell.
-        for (def_arg, actual_name) in zip(def_args, arg_names):
-            def_type, def_name = def_arg[0], def_arg[1]
+        # NOTE: we must not rely on analyzer.scopes[proc_name] bindings here,
+        # because SemanticAnalyzer exits procedure scopes after analysis.
+        # We use the stable offsets recorded during analysis.
+        try:
+            param_cells = self.analyzer.proc_param_cells[proc_name]
+        except Exception:
+            raise Exception(f"Internal error: missing parameter layout for procedure '{proc_name}'")
 
-            # Locate where to store this pointer in callee scope
-            callee_param_sym = self.analyzer.scopes[proc_name][def_name]
+        for i, ((def_arg, actual_name), param_cell_offset) in enumerate(zip(zip(def_args, arg_names), param_cells)):
+            def_type, def_name = def_arg[0], def_arg[1]
 
             # Locate actual argument symbol in caller scope/global
             actual_sym = self.analyzer.get_symbol(actual_name)
+
+            # If the callee parameter is a by-value constant (I), copy the value.
+            if def_type == 'ARG_INPUT':
+                # Pass by VALUE
+                # Arrays can't be I by spec grammar in this repo (T is separate),
+                # but keep a defensive check.
+                if actual_sym.is_array:
+                    raise Exception(
+                        f"Error: Procedure '{proc_name}' expects scalar argument '{def_name}', got array '{actual_name}'"
+                    )
+                # Load actual value, then store into callee param cell.
+                self.load_value(('PIDENTIFIER', actual_name))
+                self.emit(f"STORE {param_cell_offset}")
+                continue
 
             if def_type == 'ARG_ARRAY':
                 # Expect array
@@ -313,7 +352,7 @@ class CodeGenerator:
                     self.gen_constant(actual_sym.mem_offset)
 
             # Store computed address into callee parameter cell
-            self.emit(f"STORE {callee_param_sym.mem_offset}")
+            self.emit(f"STORE {param_cell_offset}")
 
         self.emit(f"CALL {proc_name}")
 
@@ -686,13 +725,18 @@ class CodeGenerator:
         outer_end = f"divmod_outer_end_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
         self.emit(f"{outer}:", label=True)
 
-        # if (dividend - divisor) == 0? continue; if >0 continue; if <0 (i.e. dividend < divisor) stop
+        # Continue while dividend >= divisor.
+        # Note: VM SUB is saturating (a <- max(a-x,0)), so we cannot infer
+        # a negative result. We instead use:
+        #   if dividend == divisor -> handle once in the eq handler
+        #   if dividend > divisor  -> proceed with main subtraction step
+        #   else (dividend < divisor) -> stop
         self.emit("RST a")
         self.emit("ADD c")
         self.emit("SUB d")
-        self.emit(f"JZERO {outer_end}")  # dividend == divisor => one last iteration handled below
-        self.emit(f"JPOS {outer}_cont")  # dividend > divisor
-        self.emit(f"JUMP {outer_end}")   # dividend < divisor
+        self.emit(f"JZERO {outer_end}_eq")  # dividend == divisor
+        self.emit(f"JPOS {outer}_cont")     # dividend > divisor
+        self.emit(f"JUMP {outer_end}")      # dividend < divisor
         self.emit(f"{outer}_cont:", label=True)
 
         # Setup dv = divisor, pow = 1
@@ -742,22 +786,17 @@ class CodeGenerator:
         # Loop again
         self.emit(f"JUMP {outer}")
 
+
         # Handle dividend == divisor case (one last subtraction)
-        self.emit(f"{outer_end}:", label=True)
-        # If dividend == divisor, then quotient++ and remainder becomes 0
-        self.emit("RST a")
-        self.emit("ADD c")
-        self.emit("SUB d")
-        done_label = f"divmod_done_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
-        self.emit(f"JPOS {done_label}")
-        self.emit(f"JZERO {outer_end}_eq")
-        self.emit(f"JUMP {done_label}")
         self.emit(f"{outer_end}_eq:", label=True)
-        # c = 0
+        # dividend == divisor => subtract once:
+        # - remainder becomes 0
+        # - quotient increments by 1
         self.emit("RST c")
-        # e = e + 1
         self.emit("INC e")
-        self.emit(f"{done_label}:", label=True)
+
+        # Common exit point for outer loop
+        self.emit(f"{outer_end}:", label=True)
 
         # Return selected result
         if want_quotient:
