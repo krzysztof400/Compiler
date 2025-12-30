@@ -1,83 +1,36 @@
 #!/usr/bin/env python3
-import argparse
-import subprocess
+"""Compatibility test runner.
+
+This repository uses pytest.
+
+Why keep this file?
+- It preserves the old entrypoint (`python run_tests.py`) for convenience.
+- It delegates to pytest so there's a single source of truth for test behavior.
+
+Tip (recommended): run via uv so you always use the pinned dev dependencies:
+- `uv run pytest`
+- `uv run python run_tests.py`
+"""
+
+from __future__ import annotations
+
 import sys
-from pathlib import Path
-
-
-def iter_inputs(paths: list[str]) -> list[Path]:
-    out: list[Path] = []
-    for p in paths:
-        path = Path(p)
-        if path.is_dir():
-            out.extend(sorted(path.glob("*.imp")))
-        else:
-            out.append(path)
-    # keep only existing .imp files
-    out = [p for p in out if p.exists() and p.suffix == ".imp"]
-    return sorted(dict.fromkeys(out))  # de-dup, preserve order
-
-
-def run_one(inp: Path, outdir: Path, uv: bool) -> int:
-    outdir.mkdir(parents=True, exist_ok=True)
-    outpath = outdir / f"{inp.stem}.out"
-
-    cmd = (["uv", "run", "python", "./src/compiler.py"] if uv else [sys.executable, "./src/compiler.py"])
-    cmd += [str(inp), str(outpath)]
-
-    print(f"\n=== {inp} ===")
-    print("+ " + " ".join(cmd))
-
-    proc = subprocess.run(cmd, text=True, capture_output=True)
-
-    if proc.stdout.strip():
-        print("--- stdout ---")
-        print(proc.stdout.rstrip())
-
-    if proc.stderr.strip():
-        print("--- stderr ---")
-        print(proc.stderr.rstrip())
-
-    print(f"exit code: {proc.returncode}")
-    print(f"output file: {outpath}")
-    return proc.returncode
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Run compiler.py on all .imp files in given paths.")
-    ap.add_argument(
-        "paths",
-        nargs="*",
-        default=["tests", "programs_examples"],
-        help="Files or directories to scan for .imp (default: tests programs_examples)",
-    )
-    ap.add_argument(
-        "-o",
-        "--outdir",
-        default="output",
-        help="Directory to write compiler outputs (default: output/)",
-    )
-    ap.add_argument(
-        "--no-uv",
-        action="store_true",
-        help="Run with system python instead of `uv run python`",
-    )
-    args = ap.parse_args()
-
-    inputs = iter_inputs(args.paths)
-    if not inputs:
-        print("No .imp files found in: " + ", ".join(args.paths), file=sys.stderr)
+    try:
+        import pytest  # type: ignore
+    except Exception as e:  # pragma: no cover
+        print(
+            "pytest is not available in the current environment.\n"
+            "Install dev dependencies (e.g. via uv/pip) and try again.\n"
+            f"Import error: {e}",
+            file=sys.stderr,
+        )
         return 2
 
-    outdir = Path(args.outdir)
-    failed = 0
-    for inp in inputs:
-        rc = run_one(inp, outdir, uv=not args.no_uv)
-        if rc != 0:
-            failed += 1
-
-    print(f"\nDone. Total: {len(inputs)}, Failed: {failed}, Passed: {len(inputs) - failed}")
-    return 1 if failed else 0
+    # Forward any args to pytest.
+    return pytest.main(sys.argv[1:])
 
 
 if __name__ == "__main__":

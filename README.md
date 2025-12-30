@@ -17,6 +17,28 @@ The compiler operates in several phases:
 
 ## Building and running
 
+### Tests
+
+This repo uses **pytest**.
+
+- Prefer running tests via `uv` so you use the pinned dev dependencies.
+
+```bash
+uv run pytest
+```
+
+There is also a compatibility wrapper:
+
+```bash
+uv run python run_tests.py
+```
+
+Test inputs live in `tests/fixtures/`.
+
+### Examples
+
+Example programs live in `examples/programs/`.
+
 
 ## Requirements
 - Python 3.6+
