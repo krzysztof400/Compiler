@@ -14,6 +14,12 @@ class SemanticAnalyzer:
         self.scopes["global"] = {}
         self.procedures = {}
 
+        # Fixed call interface layout: for each procedure name, store a list
+        # of parameter cell offsets that act as the "call area" for that
+        # procedure. Codegen writes actual argument addresses there before CALL.
+        # This avoids relying on procedure-local scope offsets during codegen.
+        self.proc_param_cells = {}
+
     def enter_scope(self, name):
         self.current_scope_name = name
         if name not in self.scopes:
@@ -245,13 +251,28 @@ class SemanticAnalyzer:
         self.procedures[proc_name] = ProcedureSymbol(proc_name, args)
         self.enter_scope(proc_name)
 
+        # Reserve parameter cells in memory for this procedure.
+        # They live in the procedure scope dictionary for semantic checks,
+        # but their offsets are also recorded in a stable list used by codegen.
+        self.proc_param_cells[proc_name] = []
+
         for arg in args:
             arg_type = arg[0]
             arg_name = arg[1]
 
             sym = self.declare_variable(arg_name) 
             sym.is_param = True
-            sym.is_reference = True
+            # Calling convention / semantics:
+            # - Default (IN-OUT) params are passed by reference.
+            # - 'O' params are write-only but still passed by reference.
+            # - 'I' params are read-only constants and (in this compiler)
+            #   are passed by VALUE to keep them immutable.
+            sym.is_reference = arg_type != 'ARG_INPUT'
+            if arg_type == 'ARG_INPUT':
+                sym.is_const = True
+                sym.is_initialized = True
+
+            self.proc_param_cells[proc_name].append(sym.mem_offset)
             
             if "ARRAY" in arg_type:
                  sym.__class__ = ArraySymbol
