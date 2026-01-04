@@ -1,0 +1,23 @@
+# Minimal repro: Euclid loop inside procedure with IN params and OUT result
+
+PROCEDURE g(I m, I n, O res) IS
+  a,b,r
+IN
+  a:=m;
+  b:=n;
+  WHILE b>0 DO
+    r:=a%b;
+    a:=b;
+    b:=r;
+  ENDWHILE
+  res:=a;
+END
+
+PROGRAM IS
+  m,n,gcd
+IN
+  m:=12;
+  n:=8;
+  g(m,n,gcd);
+  WRITE gcd;
+END

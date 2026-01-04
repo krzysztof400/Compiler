@@ -209,7 +209,7 @@ class SemanticAnalyzer:
         if isinstance(node, tuple) and node[0] != 'NUMBER':
              self.visit_expression(node)
 
-    def visit_identifier(self, node, is_write=False):
+    def visit_identifier(self, node, is_write=False, enforce_checks=True):
         tag = node[0]
         name = node[1]
         sym = self.get_symbol(name)
@@ -225,8 +225,12 @@ class SemanticAnalyzer:
             if tag == 'PIDENTIFIER_WITH_PID':
                 index_var_name = node[2]
                 idx_sym = self.get_symbol(index_var_name)
-                if not idx_sym.is_initialized:
+                
+                # === CHANGE START ===
+                # Only check initialization if we are in the analysis phase
+                if enforce_checks and not idx_sym.is_initialized:
                      raise Exception(f"Error: Array index '{index_var_name}' is uninitialized")
+                # === CHANGE END ===
         
         return sym
 
@@ -275,7 +279,10 @@ class SemanticAnalyzer:
             self.proc_param_cells[proc_name].append(sym.mem_offset)
             
             if "ARRAY" in arg_type:
-                 sym.__class__ = ArraySymbol
+                sym.__class__ = ArraySymbol
+                sym.is_array = True
+                sym.start_idx = 0 # Initialize attributes required by CodeGen
+                sym.end_idx = 0 # Bounds are unknown for references, assume 0-based or handled via pointer arithmetic
 
         for decl in declarations:
             if decl[0] == 'VAR':
