@@ -2,49 +2,38 @@ class CodeGenerator:
     def __init__(self, semantic_analyzer):
         self.analyzer = semantic_analyzer
         self.code = []
+        self.proc_ret_offsets = {}
+        self.verbose = False
 
-        # One dedicated memory cell used as a pseudo "call stack" for return
-        # addresses. This compiler forbids recursion (per language spec), so
-        # a single slot is sufficient.
-        self._retaddr_mem = None
-        
     def generate(self, ast):
         # AST: ('PROGRAM', procedures, main)
         _, procedures, main = ast
         
-        # Reserve a global cell for storing return addresses across CALL/RTRN.
-        # Must be reserved before generating any code so offsets are stable.
-        if self._retaddr_mem is None:
-            self._retaddr_mem = self.analyzer.declare_variable("_retaddr").mem_offset
-
-        # 1. Jump over procedures to start of main
         self.emit("JUMP main_start")
         
-        # 2. Generate code for procedures
         for proc in procedures:
             self.visit_procedure(proc)
             
-        # 3. Generate Main
         self.emit("main_start:", label=True)
         self.visit_main(main)
         self.emit("HALT")
         
+        if self.verbose:
+            for line in self.code:
+                print(line)
         return self.resolve_labels()
 
     def emit(self, instr, label=False):
-        # Just store the string, we'll format/resolve labels later
         if label:
-            self.code.append(instr) # e.g. "label:"
+            self.code.append(instr)
         else:
             self.code.append(f"\t{instr}")
 
     def resolve_labels(self):
-        # Map labels to line numbers, then remove labels from output
         label_map = {}
         clean_code = []
         current_line = 0
         
-        # First pass: find label positions
         for line in self.code:
             if line.endswith(":"):
                 label_name = line[:-1]
@@ -52,72 +41,56 @@ class CodeGenerator:
             else:
                 current_line += 1
                 
-        # Second pass: replace jumps and filter labels
         final_output = []
         for line in self.code:
             if line.endswith(":"):
                 continue
             
-            # Check for JUMP/JPOS/JZERO/CALL label
             parts = line.split()
             if len(parts) > 1 and parts[0].strip() in ["JUMP", "JZERO", "JPOS", "CALL"]:
                 op = parts[0].strip()
                 target = parts[1]
                 if target in label_map:
-                    # Replace label with absolute line number
                     final_output.append(f"{op} {label_map[target]}")
                 else:
-                    # Keep as is (maybe it was already a number)
                     final_output.append(line.strip())
             else:
                 final_output.append(line.strip())
                 
         return final_output
 
-    # --- CONSTANT GENERATION ---
     def gen_constant(self, value, register="a"):
-        # Generates a number in a register using shift/inc logic
-        # Cost: Log(n)
+        # Generates code to create a constant number in a register
         self.emit(f"RST {register}")
         if value == 0:
             return
             
-        bin_str = bin(value)[2:] # "101"
+        bin_str = bin(value)[2:] 
         for bit in bin_str:
             self.emit(f"SHL {register}")
             if bit == '1':
                 self.emit(f"INC {register}")
 
-    # --- MEMORY ADDRESS CALCULATION ---
-    def load_variable_address_to_reg(self, sym, reg_idx_result="a", reg_idx_calc="b"):
-        # Puts the MEMORY ADDRESS of the variable into reg_idx_result.
-        # This is complex for arrays: Addr = offset + (index - start)
-        pass 
-        # Actually, for RLOAD/RSTORE we usually need the address in a register.
-        # But VM has RLOAD x which means r_a <- Memory[r_x].
-        
     # --- VISITOR METHODS ---
 
     def visit_procedure(self, node):
-        # ('PROCEDURE', name, args, declarations, commands)
         proc_name = node[1]
         self.emit(f"{proc_name}:", label=True)
 
-        # CALL clobbers r_a with return address. We must save it immediately,
-        # because this compiler uses r_a for expression evaluation.
-        self.emit(f"STORE {self._retaddr_mem}")
+        ret_var_name = f"_retaddr_{proc_name}"
+        ret_sym = self.analyzer.declare_variable(ret_var_name)
+        self.proc_ret_offsets[proc_name] = ret_sym.mem_offset
+
+        self.emit(f"STORE {ret_sym.mem_offset}")
         
-        # Parameters and locals live in the procedure scope.
-        # Use SemanticAnalyzer scope so identifier->symbol resolution uses
-        # the correct memory offsets.
         self.analyzer.enter_scope(proc_name)
         try:
             self.visit_commands(node[4])
         finally:
             self.analyzer.exit_scope()
 
-        # Restore return address and return.
-        self.emit(f"LOAD {self._retaddr_mem}")
+        # Restore specific return address and return
+        self.emit(f"LOAD {ret_sym.mem_offset}")
         self.emit("RTRN")
 
     def visit_main(self, node):
@@ -145,7 +118,6 @@ class CodeGenerator:
     # --- EXPRESSION & MATH ---
 
     def gen_expression(self, node):
-        # Puts result of expression in r_a
         if isinstance(node, tuple):
             tag = node[0]
             if tag == 'NUMBER':
@@ -153,108 +125,84 @@ class CodeGenerator:
             elif tag in ['PIDENTIFIER', 'PIDENTIFIER_WITH_PID', 'PIDENTIFIER_WITH_NUM']:
                 self.load_value(node)
             elif tag == 'ADD':
-                self.gen_expression(node[1]) # LHS -> a
-                self.emit("SWP b")          # a -> b
-                self.gen_expression(node[2]) # RHS -> a
-                self.emit("ADD b")          # a = a + b
+                self.gen_expression(node[1]) 
+                self.emit("SWP b")          
+                self.gen_expression(node[2]) 
+                self.emit("ADD b")          
             elif tag == 'SUB':
+                # max(a-b, 0)
                 self.gen_expression(node[1]) # LHS -> a
                 self.emit("SWP b")
                 self.gen_expression(node[2]) # RHS -> a
-                # SUB in VM is a <- max(a-x, 0).
-                # We want LHS - RHS. So we want b - a.
-                # Current: b=LHS, a=RHS.
                 self.emit("SWP b") # a=LHS, b=RHS
-                self.emit("SUB b") # a = a - b
+                self.emit("SUB b") 
             elif tag == 'MUL':
                 self.gen_mul(node[1], node[2])
             elif tag == 'DIV':
                 self.gen_div(node[1], node[2])
             elif tag == 'MOD':
                 self.gen_mod(node[1], node[2])
-        else:
-            # Fallback (shouldn't happen with correct AST)
-            pass
 
     def load_value(self, identifier_node):
-        # Loads variable value into r_a
-        # Handles direct vars, reference vars, and arrays
-        sym = self.analyzer.visit_identifier(identifier_node)
+        # Result ends up in r_a
+        sym = self.analyzer.visit_identifier(identifier_node, enforce_checks=False)
         
         if identifier_node[0] == 'PIDENTIFIER':
-            # Scalar
-            if sym.is_reference:
-                # Indirect load: The mem cell contains an address
-                self.emit(f"LOAD {sym.mem_offset}") # a = address pointing to data
-                self.emit("SWP b")                  # b = address
-                self.emit("RLOAD b")                # a = Memory[b]
+            if getattr(sym, 'is_reference', False):
+                self.emit(f"LOAD {sym.mem_offset}") # a = address
+                self.emit("SWP b")                  
+                self.emit("RLOAD b")                # a = Mem[b]
             else:
                 self.emit(f"LOAD {sym.mem_offset}")
-
         else:
-            # Array access: tab[index]
-            # Address = sym.mem_offset + (index_val - sym.start_idx)
-            
-            # 1. Calculate Index Value -> r_a
+            # Array Logic
+            # 1. Calc Index -> r_a
             if identifier_node[0] == 'PIDENTIFIER_WITH_NUM':
-                idx = identifier_node[2]
-                self.gen_constant(idx)
+                self.gen_constant(identifier_node[2])
             else:
-                # WITH_PID
-                idx_var_name = identifier_node[2]
-                idx_node = ('PIDENTIFIER', idx_var_name)
-                self.load_value(idx_node)
+                idx_name = identifier_node[2]
+                self.load_value(('PIDENTIFIER', idx_name))
             
             # 2. Subtract start_idx
             if sym.start_idx != 0:
                 self.emit("SWP b")
                 self.gen_constant(sym.start_idx)
                 self.emit("SWP b")
-                self.emit("SUB b") # a = index - start
+                self.emit("SUB b") 
             
             # 3. Add base offset
             self.emit("SWP b")
             self.gen_constant(sym.mem_offset)
-            self.emit("ADD b") # a = mem_offset + (index-start)
+            self.emit("ADD b") 
             
-            # 4. Load from calculated address
-            self.emit("SWP b") # b = address
+            # 4. Indirect Load
+            self.emit("SWP b") 
             self.emit("RLOAD b")
 
     def store_to_variable(self, identifier_node):
-        # Assumes value to store is in r_a
-        # Stores r_a into variable defined by node
-        
-        sym = self.analyzer.visit_identifier(identifier_node, is_write=True)
-        
-        self.emit("SWP d") # Save value to d temporarily
+        # Value to store is in r_a
+        sym = self.analyzer.visit_identifier(identifier_node, is_write=True, enforce_checks=False)
+        self.emit("SWP d") # Save value to d
         
         if identifier_node[0] == 'PIDENTIFIER':
-            if sym.is_reference:
-                self.emit(f"LOAD {sym.mem_offset}") # a = address
-                self.emit("SWP b") # b = address
+            if getattr(sym, 'is_reference', False):
+                self.emit(f"LOAD {sym.mem_offset}") # a = address pointer
+                self.emit("SWP b") 
                 self.emit("SWP d") # a = value
-                self.emit("RSTORE b") # Memory[b] = a
+                self.emit("RSTORE b")
             else:
-                self.emit("SWP d") # a = value
+                self.emit("SWP d") 
                 self.emit(f"STORE {sym.mem_offset}")
-        
         else:
             # Array Store
-            # 1. Calculate Address (Reuse logic or simplify)
-            # Need to be careful not to lose value in d
-            
-            # Recover value to stack or temp reg? 
-            # We have plenty of registers. Let's use 'e' for value.
             self.emit("SWP d") 
-            self.emit("SWP e") # Value is in e
+            self.emit("SWP e") # Value in e
             
-            # Calc Index -> a
+            # Index -> a
             if identifier_node[0] == 'PIDENTIFIER_WITH_NUM':
                 self.gen_constant(identifier_node[2])
             else:
-                idx_node = ('PIDENTIFIER', identifier_node[2])
-                self.load_value(idx_node)
+                self.load_value(('PIDENTIFIER', identifier_node[2]))
             
             # Subtract start
             if sym.start_idx != 0:
@@ -266,100 +214,53 @@ class CodeGenerator:
             # Add offset
             self.emit("SWP b")
             self.gen_constant(sym.mem_offset)
-            self.emit("ADD b") # a = address
+            self.emit("ADD b") 
             
             self.emit("SWP b") # b = address
             self.emit("SWP e") # a = value
             self.emit("RSTORE b")
 
     def gen_proc_call(self, cmd):
-        # ('PROC_CALL', proc_name, [arg1, arg2, ...])
         proc_name = cmd[1]
         arg_names = cmd[2]
-
-        if proc_name not in self.analyzer.procedures:
-            raise Exception(f"Error: Call to undefined procedure '{proc_name}'")
-
         proc_def = self.analyzer.procedures[proc_name]
-        def_args = proc_def.args
-
-        if len(arg_names) != len(def_args):
-            raise Exception(
-                f"Error: Procedure '{proc_name}' expects {len(def_args)} arguments, got {len(arg_names)}"
-            )
-
-        # Convention used by this compiler:
-        # - Formal parameters were allocated as memory cells in the procedure scope
-        #   (via SemanticAnalyzer.declare_variable during visit_procedure).
-        # - Each formal parameter cell stores the ADDRESS of the actual argument.
-        # - For scalar args: address of the variable cell.
-        # - For array args: address of the first cell of the array.
-        # - For actual arguments that are themselves references (params in caller),
-        #   we must load the pointer stored in their cell.
-        #
-        # Therefore, at call site we write into each callee param cell.
-        # NOTE: we must not rely on analyzer.scopes[proc_name] bindings here,
-        # because SemanticAnalyzer exits procedure scopes after analysis.
-        # We use the stable offsets recorded during analysis.
+        
+        # Get parameter memory cells for the CALLEE
         try:
             param_cells = self.analyzer.proc_param_cells[proc_name]
-        except Exception:
-            raise Exception(f"Internal error: missing parameter layout for procedure '{proc_name}'")
+        except KeyError:
+             raise Exception(f"Internal Error: No memory map for {proc_name}")
 
-        for i, ((def_arg, actual_name), param_cell_offset) in enumerate(zip(zip(def_args, arg_names), param_cells)):
-            def_type, def_name = def_arg[0], def_arg[1]
-
-            # Locate actual argument symbol in caller scope/global
+        for i, ((def_arg, actual_name), param_offset) in enumerate(zip(zip(proc_def.args, arg_names), param_cells)):
+            def_type = def_arg[0]
             actual_sym = self.analyzer.get_symbol(actual_name)
 
-            # If the callee parameter is a by-value constant (I), copy the value.
-            if def_type == 'ARG_INPUT':
-                # Pass by VALUE
-                # Arrays can't be I by spec grammar in this repo (T is separate),
-                # but keep a defensive check.
-                if actual_sym.is_array:
-                    raise Exception(
-                        f"Error: Procedure '{proc_name}' expects scalar argument '{def_name}', got array '{actual_name}'"
-                    )
-                # Load actual value, then store into callee param cell.
+            if def_type == 'ARG_INPUT': 
+                # Pass by Value (Copy)
                 self.load_value(('PIDENTIFIER', actual_name))
-                self.emit(f"STORE {param_cell_offset}")
-                continue
-
-            if def_type == 'ARG_ARRAY':
-                # Expect array
-                if not actual_sym.is_array:
-                    raise Exception(
-                        f"Error: Procedure '{proc_name}' expects array argument '{def_name}', got '{actual_name}'"
-                    )
-                # Address of array base is its mem_offset.
-                # If the array is passed as reference (param), load the pointer first.
-                if getattr(actual_sym, 'is_reference', False):
-                    self.emit(f"LOAD {actual_sym.mem_offset}")
-                else:
-                    self.gen_constant(actual_sym.mem_offset)
-
+                self.emit(f"STORE {param_offset}")
             else:
-                # Expect scalar variable
+                # Pass by Reference (Pass Address)
                 if actual_sym.is_array:
-                    raise Exception(
-                        f"Error: Procedure '{proc_name}' expects scalar argument '{def_name}', got array '{actual_name}'"
-                    )
-                if getattr(actual_sym, 'is_reference', False):
-                    # actual_sym.mem_offset points to a cell holding the real address
-                    self.emit(f"LOAD {actual_sym.mem_offset}")
+                    # Array Ref: if passing a reference to a reference, load the pointer
+                    if getattr(actual_sym, 'is_reference', False):
+                        self.emit(f"LOAD {actual_sym.mem_offset}")
+                    else:
+                        self.gen_constant(actual_sym.mem_offset)
                 else:
-                    self.gen_constant(actual_sym.mem_offset)
-
-            # Store computed address into callee parameter cell
-            self.emit(f"STORE {param_cell_offset}")
+                    # Scalar Ref
+                    if getattr(actual_sym, 'is_reference', False):
+                        self.emit(f"LOAD {actual_sym.mem_offset}")
+                    else:
+                        self.gen_constant(actual_sym.mem_offset)
+                
+                self.emit(f"STORE {param_offset}")
 
         self.emit(f"CALL {proc_name}")
 
-    # --- COMMAND GENERATORS ---
+    # --- CONTROL FLOW ---
 
     def gen_assign(self, cmd):
-        # ('ASSIGN', identifier, expression)
         self.gen_expression(cmd[2])
         self.store_to_variable(cmd[1])
 
@@ -369,23 +270,18 @@ class CodeGenerator:
 
     def gen_write(self, cmd):
         val = cmd[1]
-        if isinstance(val, tuple):
-            self.load_value(val)
-        else: # NUMBER
-            self.gen_constant(val)
+        self.gen_expression(val)
         self.emit("WRITE")
 
     def gen_if(self, cmd):
-        # ('IF', condition, cmd_true, cmd_false)
         cond = cmd[1]
         false_label = f"else_{id(cmd)}"
         end_label = f"endif_{id(cmd)}"
         
-        # Generates code for condition, JUMPS to false_label if false
-        self.gen_condition(cond, false_label)
-        
+        self.gen_condition(cond, false_label) # Jump if FALSE
         self.visit_commands(cmd[2])
-        if len(cmd) > 3:
+        
+        if len(cmd) > 3: # Has ELSE
             self.emit(f"JUMP {end_label}")
             
         self.emit(f"{false_label}:", label=True)
@@ -399,7 +295,6 @@ class CodeGenerator:
         
         self.emit(f"{start_label}:", label=True)
         self.gen_condition(cmd[1], end_label)
-        
         self.visit_commands(cmd[2])
         self.emit(f"JUMP {start_label}")
         self.emit(f"{end_label}:", label=True)
@@ -409,45 +304,26 @@ class CodeGenerator:
         self.emit(f"{start_label}:", label=True)
         self.visit_commands(cmd[1])
         # REPEAT ... UNTIL cond
-        # If cond is TRUE, we stop. So if FALSE, we jump back.
-        # gen_condition jumps if FALSE. So we invert logic?
-        # My gen_condition jumps to target if FALSE.
-        # We want: If FALSE, JUMP start.
+        # If cond is TRUE, we stop. So if cond is FALSE, we JUMP back.
+        # gen_condition jumps if FALSE. So checking condition -> jump back 
+        # is exactly what we need.
         self.gen_condition(cmd[2], start_label) 
 
     def gen_for(self, cmd, down=False):
-        # ('FOR_TO', iterator_name, start_val, end_val, commands)
-        # Note: Spec says iterator is local and calc'd once.
-        # Implementation:
-        # 1. Calc start -> Iterator
-        # 2. Calc end -> Temp Limit Register/Mem
-        # 3. Loop Check
-        # 4. Body
-        # 5. Inc/Dec Iterator
-
         iterator_name = cmd[1]
         start_val = cmd[2]
         end_val = cmd[3]
 
-        # The semantic analyzer in this repo doesn't traverse command bodies.
-        # That means FOR iterators are not guaranteed to exist in scopes during
-        # code generation. We therefore reserve the iterator + limit cells here.
-        # They are local to the generated code, consistent with spec.
-
-        # Reserve an internal cell for iterator storage (must not clash with
-        # user-declared names; iterator is local by spec).
-        iter_storage_name = f"_iter_{iterator_name}_{id(cmd)}"
+        # Allocate internal registers for loop bounds
+        iter_storage_name = f"_iter_{id(cmd)}"
         iter_sym = self.analyzer.declare_variable(iter_storage_name)
-        iter_sym.is_iterator = True
-        iter_sym.is_const = True
         iter_sym.is_initialized = True
-
-        limit_name = f"_limit_{iterator_name}_{id(cmd)}"
+        
+        limit_name = f"_limit_{id(cmd)}"
         limit_sym = self.analyzer.declare_variable(limit_name)
         limit_sym.is_initialized = True
 
-        # Temporarily bind the user-visible iterator name to the internal
-        # storage symbol for the duration of loop body generation.
+        # Scope Management for Iterator
         scope = self.analyzer.scopes[self.analyzer.current_scope_name]
         prev_iter_binding = scope.get(iterator_name)
         scope[iterator_name] = iter_sym
@@ -456,57 +332,37 @@ class CodeGenerator:
         self.gen_expression(start_val)
         self.emit(f"STORE {iter_sym.mem_offset}")
 
-        # 2. Evaluate and store loop limit ONCE (spec requirement).
-        if limit_sym is not None:
-            self.gen_expression(end_val)
-            self.emit(f"STORE {limit_sym.mem_offset}")
+        # 2. Calc Limit ONCE
+        self.gen_expression(end_val)
+        self.emit(f"STORE {limit_sym.mem_offset}")
         
         start_label = f"for_start_{id(cmd)}"
         end_label = f"for_end_{id(cmd)}"
         
         self.emit(f"{start_label}:", label=True)
         
-        # Load Iterator -> a
-        self.emit(f"LOAD {iter_sym.mem_offset}")
-
-        # Load Limit -> b (from hidden limit variable, no re-evaluation)
-        if limit_sym is None:
-            # Backwards compatibility fallback (shouldn't happen after SA fix).
-            self.emit("SWP b")
-            self.gen_expression(end_val)
-            self.emit("SWP b")
-        else:
-            self.emit("SWP b")
-            self.emit(f"LOAD {limit_sym.mem_offset}")
-            self.emit("SWP b")
-        
-        # Check Condition
-        # UP: iter <= limit  => continue. Else jump end.
-        # VM: SUB b (a - b). If a > b (result > 0) -> Stop.
-        # But SUB is max(a-b, 0).
-        # If iter > limit, iter - limit > 0.
-        
-        self.emit("SWP c") # c = b (limit)
-        self.emit("SWP b") # b = a (iter), a = c (limit)
-        # a=limit, b=iter
+        # Load values
+        self.emit(f"LOAD {iter_sym.mem_offset}") # a = iter
+        self.emit("SWP b") 
+        self.emit(f"LOAD {limit_sym.mem_offset}") # a = limit, b = iter
         
         if down:
-             # DOWN: iter >= limit. Stop if iter < limit.
-             # Stop if limit > iter.
+             # DOWNTO: Run if iter >= limit.
+             # Stop if iter < limit. (limit > iter)
              # limit - iter > 0
-             self.emit("SUB b") # limit - iter
+             self.emit("SUB b") 
              self.emit(f"JPOS {end_label}")
         else:
-             # UP: iter <= limit. Stop if iter > limit.
+             # TO: Run if iter <= limit.
+             # Stop if iter > limit.
              # iter - limit > 0
              self.emit("SWP b") # a=iter, b=limit
-             self.emit("SUB b") # iter - limit
+             self.emit("SUB b") 
              self.emit(f"JPOS {end_label}")
              
-        # Body
         self.visit_commands(cmd[4])
         
-        # Increment/Decrement
+        # Update Iterator
         self.emit(f"LOAD {iter_sym.mem_offset}")
         if down:
             self.emit("DEC a")
@@ -517,155 +373,135 @@ class CodeGenerator:
         self.emit(f"JUMP {start_label}")
         self.emit(f"{end_label}:", label=True)
 
-        # Restore previous iterator binding (if any) and release our temp cells.
+        # Cleanup
         if prev_iter_binding is None:
             del scope[iterator_name]
         else:
             scope[iterator_name] = prev_iter_binding
-
         del scope[iter_storage_name]
         del scope[limit_name]
-        self.analyzer.memory_counter -= 2
 
     def gen_condition(self, node, jump_target_if_false):
-        # ('EQ', val1, val2) etc.
-        # Generates code that JUMPS to jump_target_if_false if condition is FALSE.
-        
         op = node[0]
-        # Parser/AST tag normalization
-        op_map = {
-            'EQUAL': 'EQ',
-            'NE': 'NEQ',
-            'NEQ': 'NEQ',
-            'LEQ': 'LE',
-            'GEQ': 'GE',
-            'LT': 'LT',
-            'GT': 'GT',
-            'LE': 'LE',
-            'GE': 'GE',
-            'EQ': 'EQ',
-        }
+        # Map AST ops to standard set
+        op_map = {'EQUAL': 'EQ', 'NE': 'NEQ', 'NEQ': 'NEQ', 'LEQ': 'LE', 'GEQ': 'GE'}
         op = op_map.get(op, op)
-        # Evaluate LHS -> c, RHS -> d (preserved copies)
+
         self.gen_expression(node[1])
         self.emit("SWP c")
         self.gen_expression(node[2])
         self.emit("SWP d")
 
-        # Helper: compute (x - y) with x in reg_x, y in reg_y.
-        # We do: a = x; b = y; a = a - b
+        # c = LHS, d = RHS
+        # Helper: check (x - y)
         def sub_regs(reg_x, reg_y):
             self.emit("RST a")
             self.emit(f"ADD {reg_x}")
             self.emit(f"SWP b")
             self.emit("RST a")
             self.emit(f"ADD {reg_y}")
-            self.emit("SUB b")
+            self.emit("SUB b") # y - x (careful with order, we want reg_x - reg_y usually)
 
-        # Semantics: jump when condition is FALSE.
+        # Correct Subtraction logic for VM: a - b
+        # Load x to a, y to b, SUB b
+        def check_diff(reg_x, reg_y):
+            # Returns a = max(reg_x - reg_y, 0)
+            self.emit("RST a")
+            self.emit(f"ADD {reg_x}")
+            self.emit("SWP b")
+            self.emit("RST a") # a=0
+            self.emit("ADD b") # a=y
+            self.emit("SWP b") # b=y
+            self.emit("RST a")
+            self.emit(f"ADD {reg_x}") # a=x
+            self.emit("SUB b") # a = x - y
+
         if op == 'EQ':
-            # False when c != d.
-            sub_regs('c', 'd')
-            self.emit(f"JPOS {jump_target_if_false}")  # c > d
-            sub_regs('d', 'c')
-            self.emit(f"JPOS {jump_target_if_false}")  # d > c
+            # False if c != d. (c > d OR d > c)
+            check_diff('c', 'd') # c - d
+            self.emit(f"JPOS {jump_target_if_false}")
+            check_diff('d', 'c') # d - c
+            self.emit(f"JPOS {jump_target_if_false}")
 
         elif op == 'NEQ':
-            # False when c == d.
-            true_label = f"cond_neq_true_{id(node)}"
-            sub_regs('c', 'd')
-            self.emit(f"JPOS {true_label}")
-            sub_regs('d', 'c')
-            self.emit(f"JPOS {true_label}")
-            # equal => false
-            self.emit(f"JUMP {jump_target_if_false}")
+            # False if c == d.
+            # If c != d, we must NOT jump.
+            true_label = f"cond_true_{id(node)}"
+            check_diff('c', 'd')
+            self.emit(f"JPOS {true_label}") # c > d, true, skip jump
+            check_diff('d', 'c')
+            self.emit(f"JPOS {true_label}") # d > c, true, skip jump
+            self.emit(f"JUMP {jump_target_if_false}") # Equal
             self.emit(f"{true_label}:", label=True)
 
         elif op == 'LT':
-            # c < d; false when c >= d.
-            # If c - d > 0 => c > d (false). If c - d == 0 => equal (false).
-            sub_regs('c', 'd')
-            self.emit(f"JPOS {jump_target_if_false}")
-            self.emit(f"JZERO {jump_target_if_false}")
+            # c < d. False if c >= d.
+            # c >= d means c - d >= 0 (wait, saturating...)
+            # c >= d means: c > d OR c == d.
+            # if c - d > 0 -> False
+            # if c - d == 0 -> False (saturating 0 could mean equal OR less, problematic)
+            
+            # Better logic: True only if d - c > 0.
+            # False if d - c == 0 (since SUB is saturating, this covers d <= c)
+            check_diff('d', 'c') # d - c
+            self.emit(f"JZERO {jump_target_if_false}") 
 
         elif op == 'GT':
-            # c > d; false when c <= d.
-            # If d - c > 0 => d > c (false). If d - c == 0 => equal (false).
-            sub_regs('d', 'c')
-            self.emit(f"JPOS {jump_target_if_false}")
+            # c > d. False if c <= d.
+            # True only if c - d > 0.
+            check_diff('c', 'd')
             self.emit(f"JZERO {jump_target_if_false}")
 
         elif op == 'LE':
-            # c <= d; false when c > d.
-            sub_regs('c', 'd')
+            # c <= d. False if c > d.
+            check_diff('c', 'd')
             self.emit(f"JPOS {jump_target_if_false}")
 
         elif op == 'GE':
-            # c >= d; false when c < d.
-            sub_regs('d', 'c')
+            # c >= d. False if d > c.
+            check_diff('d', 'c')
             self.emit(f"JPOS {jump_target_if_false}")
 
-        else:
-            raise Exception(f"Unknown condition op: {op}")
+    # --- MATH (Logarithmic Time) ---
 
-    # --- MATH HELPERS (Logarithmic) ---
     def gen_mul(self, node1, node2):
-        # a * b
-        # Hardest part: Registers are limited and we don't have a stack.
-        # We need to perform a*b -> a.
-        # Use registers: 
-        # r_c = multiplier (a)
-        # r_d = multiplicand (b)
-        # r_e = result (0)
-        
+        # Result in r_a
         self.gen_expression(node1)
-        self.emit("SWP c") # c = a
+        self.emit("SWP c") # Multiplier
         self.gen_expression(node2)
-        self.emit("SWP d") # d = a
+        self.emit("SWP d") # Multiplicand
+        self.emit("RST e") # Accumulator
         
-        self.emit("RST e") # res = 0
-        
-        # Loop Label
         start = f"mul_start_{id(node1)}"
         end = f"mul_end_{id(node1)}"
         
         self.emit(f"{start}:", label=True)
-        # if c == 0 jump end
+        # check c == 0
         self.emit("RST a")
         self.emit("ADD c")
         self.emit(f"JZERO {end}")
         
-        # if c % 2 != 0: res += d
-        # check parity of c:
-        # copy c to a, div by 2, mul by 2, sub from orig?
-        # or simpler: c is shifted right every time. 
-        # Check lowest bit?
-        # Standard VM trick for parity:
-        # tmp = c / 2
-        # tmp = tmp * 2
-        # diff = c - tmp
-        # if diff > 0 -> odd.
-        
-        self.emit("SWP a") # a = c
-        self.emit("SWP f") # f = c (save)
+        # Check if c is odd: (c - (c/2)*2) > 0
+        self.emit("SWP a")
+        self.emit("SWP f") # f = c
         self.emit("SHR a") # a = c/2
-        self.emit("SWP a") # a=0?, swp a is c/2
+        self.emit("SWP a") 
         self.emit("SHL a") # a = (c/2)*2
-        self.emit("SWP b") # b = floor
+        self.emit("SWP b") 
         self.emit("RST a")
-        self.emit("ADD f") # a = c
-        self.emit("SUB b") # a = c - floor
+        self.emit("ADD f") 
+        self.emit("SUB b") # c - floor(c)
         
-        skip_add = f"mul_skip_{id(node1)}_{id(node2)}"
-        self.emit(f"JZERO {skip_add}")
+        skip = f"mul_skip_{id(node1)}_{id(node2)}"
+        self.emit(f"JZERO {skip}")
         
-        # Add d to res
+        # Add d to result
         self.emit("RST a")
         self.emit("ADD e")
         self.emit("ADD d")
-        self.emit("SWP e") # e = new res
+        self.emit("SWP e")
         
-        self.emit(f"{skip_add}:", label=True)
+        self.emit(f"{skip}:", label=True)
         
         # d *= 2
         self.emit("RST a")
@@ -675,146 +511,102 @@ class CodeGenerator:
         
         # c /= 2
         self.emit("RST a")
-        self.emit("ADD f") # recover c
+        self.emit("ADD f")
         self.emit("SHR a")
         self.emit("SWP c")
-        
         self.emit(f"JUMP {start}")
-        self.emit(f"{end}:", label=True)
         
+        self.emit(f"{end}:", label=True)
         self.emit("RST a")
-        self.emit("ADD e") # result to a
+        self.emit("ADD e")
 
-    def _gen_divmod(self, node1, node2, want_quotient: bool):
-        """Compute quotient or remainder of integer division in O(log a).
-
-        Contract:
-        - Inputs: expression nodes node1 (dividend), node2 (divisor)
-        - Output: result in r_a
-          - if want_quotient: floor(dividend/divisor)
-          - else: dividend % divisor
-        - Division by zero: returns 0 (both quotient and remainder)
-
-        Register plan (kept local to this routine):
-        - c: dividend (will be reduced)
-        - d: divisor
-        - e: quotient
-        - f: "current" divisor multiple (dv)
-        - g: "current" power-of-two multiple (pow)
-        - b: scratch
-        """
-
-        # Evaluate dividend/divisor
+    def _gen_divmod(self, node1, node2, quotient=True):
         self.gen_expression(node1)
-        self.emit("SWP c")  # c = dividend
+        self.emit("SWP c") # Dividend
         self.gen_expression(node2)
-        self.emit("SWP d")  # d = divisor
-
-        # If divisor == 0 => result 0
-        div_by_zero = f"divmod_div0_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
-        divmod_end = f"divmod_end_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
+        self.emit("SWP d") # Divisor
+        
+        end_lbl = f"dm_end_{id(node1)}_{id(node2)}"
+        
+        # Check div 0
         self.emit("RST a")
         self.emit("ADD d")
-        self.emit(f"JZERO {div_by_zero}")
-
-        # quotient = 0
-        self.emit("RST e")
-
-        # Main loop: while dividend >= divisor
-        outer = f"divmod_outer_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
-        outer_end = f"divmod_outer_end_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
-        self.emit(f"{outer}:", label=True)
-
-        # Continue while dividend >= divisor.
-        # Note: VM SUB is saturating (a <- max(a-x,0)), so we cannot infer
-        # a negative result. We instead use:
-        #   if dividend == divisor -> handle once in the eq handler
-        #   if dividend > divisor  -> proceed with main subtraction step
-        #   else (dividend < divisor) -> stop
+        self.emit(f"JZERO {end_lbl}") # Result a=0 is correct
+        
+        self.emit("RST e") # Quotient
+        self.emit("RST a") # Remainder will be in c at end
+        
+        loop = f"dm_loop_{id(node1)}"
+        self.emit(f"{loop}:", label=True)
+        
+        # While c >= d
         self.emit("RST a")
         self.emit("ADD c")
-        self.emit("SUB d")
-        self.emit(f"JZERO {outer_end}_eq")  # dividend == divisor
-        self.emit(f"JPOS {outer}_cont")     # dividend > divisor
-        self.emit(f"JUMP {outer_end}")      # dividend < divisor
-        self.emit(f"{outer}_cont:", label=True)
-
-        # Setup dv = divisor, pow = 1
+        self.emit("SUB d") 
+        # If c < d, c-d=0 (saturated). We need strictly less.
+        # If c < d, we are done.
+        # But VM SUB returns 0 for equal AND less.
+        # Check d - c. If > 0 => d > c => done.
+        self.emit("SWP f") # Save c-d check
         self.emit("RST a")
         self.emit("ADD d")
-        self.emit("SWP f")  # f = dv
+        self.emit("SUB c")
+        self.emit(f"JPOS {end_lbl}") 
+        # If d > c, jump. If d == c, result 0, no jump.
+        
+        # Find largest shift
+        self.emit("RST a")
+        self.emit("ADD d")
+        self.emit("SWP f") # f = current divisor (d * 2^k)
         self.emit("RST g")
-        self.emit("INC g")  # g = pow
-
-        # Find the largest dv <= dividend by doubling.
-        # We keep doubling while (dividend - (dv*2)) >= 0.
-        grow = f"divmod_grow_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
-        grow_end = f"divmod_grow_end_{id(node1)}_{id(node2)}_{'q' if want_quotient else 'r'}"
+        self.emit("INC g") # g = multiple (2^k)
+        
+        grow = f"dm_grow_{id(node1)}"
         self.emit(f"{grow}:", label=True)
-        # b = dv*2
+        
         self.emit("RST a")
         self.emit("ADD f")
         self.emit("SHL a")
-        self.emit("SWP b")
-        # if dividend - b >= 0 then we can grow
+        self.emit("SWP b") # b = f * 2
+        
+        # If b > c, stop growing
         self.emit("RST a")
-        self.emit("ADD c")
-        self.emit("SUB b")
-        self.emit(f"JPOS {grow}_do")
-        self.emit(f"JZERO {grow}_do")
-        self.emit(f"JUMP {grow_end}")
-        self.emit(f"{grow}_do:", label=True)
-        # dv = dv*2, pow = pow*2
+        self.emit("ADD b")
+        self.emit("SUB c") 
+        self.emit(f"JPOS {loop}_sub")
+        
+        # Update f, g
         self.emit("RST a")
         self.emit("ADD b")
         self.emit("SWP f")
-        self.emit("SHL g")
+        
+        self.emit("RST a")
+        self.emit("ADD g")
+        self.emit("SHL a")
+        self.emit("SWP g")
         self.emit(f"JUMP {grow}")
-        self.emit(f"{grow_end}:", label=True)
-
-        # Subtract dv from dividend and add pow to quotient
+        
+        self.emit(f"{loop}_sub:", label=True)
+        # c -= f
         self.emit("RST a")
         self.emit("ADD c")
         self.emit("SUB f")
-        self.emit("SWP c")  # c = dividend - dv
-
+        self.emit("SWP c")
+        
+        # e += g
         self.emit("RST a")
         self.emit("ADD e")
         self.emit("ADD g")
-        self.emit("SWP e")  # e += pow
-
-        # Loop again
-        self.emit(f"JUMP {outer}")
-
-
-        # Handle dividend == divisor case (one last subtraction)
-        self.emit(f"{outer_end}_eq:", label=True)
-        # dividend == divisor => subtract once:
-        # - remainder becomes 0
-        # - quotient increments by 1
-        self.emit("RST c")
-        self.emit("INC e")
-
-        # Common exit point for outer loop
-        self.emit(f"{outer_end}:", label=True)
-
-        # Return selected result
-        if want_quotient:
-            self.emit("RST a")
+        self.emit("SWP e")
+        
+        self.emit(f"JUMP {loop}")
+        
+        self.emit(f"{end_lbl}:", label=True)
+        self.emit("RST a")
+        if quotient:
             self.emit("ADD e")
         else:
-            self.emit("RST a")
             self.emit("ADD c")
-        self.emit(f"JUMP {divmod_end}")
 
-        self.emit(f"{div_by_zero}:", label=True)
-        self.emit("RST a")
-        self.emit(f"{divmod_end}:", label=True)
-
-    def gen_div(self, node1, node2):
-        # a / b (floor), logarithmic time
-        self._gen_divmod(node1, node2, want_quotient=True)
-
-    def gen_mod(self, node1, node2):
-        # a % b, logarithmic time
-        self._gen_divmod(node1, node2, want_quotient=False)
+    def gen_div(self, n1, n2): self._gen_divmod(n1, n2, True)
+    def gen_mod(self, n1, n2): self._gen_divmod(n1, n2, False)

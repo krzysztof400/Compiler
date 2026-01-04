@@ -40,12 +40,13 @@ if __name__ == '__main__':
         pp = pprint.PrettyPrinter(indent=4)
         pp.pprint(ast)
     
-    analyzer = SemanticAnalyzer()
     
     ast = parser.parse(lexer.tokenize(text))
     if ast:
+        analyzer = SemanticAnalyzer()
         analyzer.analyze(ast)
         generator = CodeGenerator(analyzer)
+        if verbose: generator.verbose = True
         generated_code = generator.generate(ast)
         with open(output_file, 'w') as f:
             f.write("\n".join(generated_code))

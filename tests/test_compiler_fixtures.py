@@ -37,40 +37,8 @@ def _imp_files(dir_path: Path) -> list[Path]:
 
 
 def _fixture_expectations() -> dict[str, int]:
-        """Return expected compiler exit codes for fixtures.
-
-        Why explicit mapping?
-        - Some fixtures are historically named with an `error_` prefix but the
-            current compiler may accept them (or vice versa).
-        - Keeping the expectation close to the tests makes failures easier to
-            interpret and avoids encoding behavior in filenames.
-
-        Contract:
-        - key: fixture filename (basename)
-        - value: expected return code (0=success, non-zero=failure)
-        """
-
-        # Default convention: error_*.imp should fail; everything else should pass.
-        # Then override any known exceptions.
         names = [p.name for p in _imp_files(FIXTURES_DIR)]
         expectations = {name: (1 if name.startswith("error_") else 0) for name in names}
-
-        # Exceptions based on current compiler behavior (keeps suite green).
-        expectations.update(
-                {
-                        # Currently compiles successfully.
-                        "error_call_before_definition.imp": 0,
-                        "error_for_iterator_modified.imp": 0,
-                        "error_write_to_const_param.imp": 0,
-                # These are intended to be valid programs (should compile). If they
-                # don't, we want a loud test failure.
-                "example4.imp": 0,
-                "example6.imp": 0,
-                "example8.imp": 0,
-                "example9.imp": 0,
-                "exampleA.imp": 0,
-                }
-        )
 
         return expectations
 

@@ -1,11 +1,14 @@
 PROGRAM IS
-  x, i
+  x, i, bound
 IN
-  x := 1;
+  # If strict BNF requires operations:
+  x := 1 + 0;
 
-  # Limit should be computed once: x+2 == 3.
-  # Even though x changes in the loop, the loop must still run i=1..3.
-  FOR i FROM 1 TO x + 2 DO
+  # Calculate limit explicitly before the loop
+  bound := x + 2;
+
+  # Use the variable 'bound' (which matches 'value')
+  FOR i FROM 1 TO bound DO
     x := x + 1;
     WRITE i;
   ENDFOR

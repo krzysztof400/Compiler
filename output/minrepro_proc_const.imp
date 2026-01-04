@@ -1,0 +1,16 @@
+# Minimal repro: procedure with I param, copy and write
+
+PROCEDURE p(I m, O out) IS
+  a
+IN
+  a:=m;
+  out:=a;
+END
+
+PROGRAM IS
+  m,x
+IN
+  m:=7;
+  p(m,x);
+  WRITE x;
+END
