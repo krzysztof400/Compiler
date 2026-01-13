@@ -12,10 +12,10 @@ FIXTURE = REPO_ROOT / "tests" / "fixtures" / "example3.imp"
 # Compiler entrypoint uses flat imports
 sys.path.append(str(REPO_ROOT / "src"))
 
-from my_lexer import MyLexer  # noqa: E402
-from my_parser import MyParser  # noqa: E402
-from semantic_analyzer import SemanticAnalyzer  # noqa: E402
-from code_generator import CodeGenerator  # noqa: E402
+from my_lexer import MyLexer
+from my_parser import MyParser
+from semantic_analyzer import SemanticAnalyzer
+from code_generator import CodeGenerator
 
 
 def _compile_fixture_to_mr(tmp_path: Path) -> Path:

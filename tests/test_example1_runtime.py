@@ -12,10 +12,10 @@ FIXTURE = REPO_ROOT / "tests" / "fixtures" / "example1.imp"
 # Compiler entrypoint uses flat imports
 sys.path.append(str(REPO_ROOT / "src"))
 
-from my_lexer import MyLexer  # noqa: E402
-from my_parser import MyParser  # noqa: E402
-from semantic_analyzer import SemanticAnalyzer  # noqa: E402
-from code_generator import CodeGenerator  # noqa: E402
+from my_lexer import MyLexer
+from my_parser import MyParser
+from semantic_analyzer import SemanticAnalyzer
+from code_generator import CodeGenerator
 
 
 def _compile_fixture_to_mr(tmp_path: Path) -> Path:
@@ -59,7 +59,6 @@ def test_example1_terminates_and_outputs_gcd(tmp_path: Path, m: int, n: int):
 
     assert proc.returncode == 0, proc.stderr.decode(errors="replace")
 
-    # VM prints prompts like '?', '>', etc. We extract integers from stdout.
     out = proc.stdout.decode(errors="replace")
     nums = [int(tok) for tok in out.replace("?", " ").replace(">", " ").split() if tok.isdigit()]
     assert len(nums) >= 3, f"expected at least 3 numbers (x,y,z), got: {out!r}"
