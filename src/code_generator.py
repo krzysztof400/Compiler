@@ -4,6 +4,19 @@ class CodeGenerator:
         self.code = []
         self.proc_ret_offsets = {}
         self.verbose = False
+        # Temporary memory cells used by codegen helpers (comparison helpers)
+        # Reserve two global temporary cells to avoid clobbering registers
+        try:
+            self._cmp_tmp1 = self.analyzer.declare_variable('_cmp_tmp1')
+            self._cmp_tmp2 = self.analyzer.declare_variable('_cmp_tmp2')
+            # mark them initialized so semantic checks ignore them
+            self._cmp_tmp1.is_initialized = True
+            self._cmp_tmp2.is_initialized = True
+        except Exception:
+            # If analyzer already declared these (e.g., on repeated codegen runs), just fetch them
+            scope = self.analyzer.scopes.get(self.analyzer.current_scope_name, {})
+            self._cmp_tmp1 = scope.get('_cmp_tmp1') or self.analyzer.scopes['global'].get('_cmp_tmp1')
+            self._cmp_tmp2 = scope.get('_cmp_tmp2') or self.analyzer.scopes['global'].get('_cmp_tmp2')
 
     def generate(self, ast):
         # AST: ('PROGRAM', procedures, main)
@@ -409,12 +422,10 @@ class CodeGenerator:
             self.emit("RST a")
             self.emit(f"ADD {reg_x}")
             self.emit("SWP b")
-            self.emit("RST a") # a=0
-            self.emit("ADD b") # a=y
-            self.emit("SWP b") # b=y
             self.emit("RST a")
-            self.emit(f"ADD {reg_x}") # a=x
-            self.emit("SUB b") # a = x - y
+            self.emit(f"ADD {reg_y}")
+            self.emit("SWP b")
+            self.emit("SUB b")
 
         if op == 'EQ':
             # False if c != d. (c > d OR d > c)
@@ -435,16 +446,9 @@ class CodeGenerator:
             self.emit(f"{true_label}:", label=True)
 
         elif op == 'LT':
-            # c < d. False if c >= d.
-            # c >= d means c - d >= 0 (wait, saturating...)
-            # c >= d means: c > d OR c == d.
-            # if c - d > 0 -> False
-            # if c - d == 0 -> False (saturating 0 could mean equal OR less, problematic)
-            
-            # Better logic: True only if d - c > 0.
-            # False if d - c == 0 (since SUB is saturating, this covers d <= c)
-            check_diff('d', 'c') # d - c
-            self.emit(f"JZERO {jump_target_if_false}") 
+            # True if d - c > 0, False otherwise
+            check_diff('d', 'c')
+            self.emit(f"JZERO {jump_target_if_false}")
 
         elif op == 'GT':
             # c > d. False if c <= d.
