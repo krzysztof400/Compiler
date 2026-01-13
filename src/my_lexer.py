@@ -1,4 +1,5 @@
 from sly import Lexer
+from schemas import LexicalError, SourceLocation
 
 class MyLexer(Lexer):
     tokens = {
@@ -60,5 +61,7 @@ class MyLexer(Lexer):
         self.lineno += len(t.value)
 
     def error(self, t):
-        print(f"Illegal character '{t.value[0]}' at line {self.lineno}")
-        self.index += 1
+        raise LexicalError(
+            f"Illegal character '{t.value[0]}'",
+            location=SourceLocation(self.lineno),
+        )

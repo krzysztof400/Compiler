@@ -1,23 +1,29 @@
-from schemas import VariableSymbol, ArraySymbol, ProcedureSymbol
+from schemas import VariableSymbol, ArraySymbol, ProcedureSymbol, SemanticError, SourceLocation
 
 class SemanticAnalyzer:
+    def _loc_from_node(self, node):
+        """
+        Best-effort location extraction from AST tuples.
+        Parser attaches lineno as the last element for many nodes.
+        """
+        try:
+            if isinstance(node, tuple) and len(node) >= 2 and isinstance(node[-1], int):
+                return SourceLocation(node[-1])
+        except Exception:
+            pass
+        return None
     def __init__(self):
         self.scopes = {}
         self.current_scope_name = "global"
         self.memory_counter = 0
 
-        # FOR loop metadata: maps id(for_node) -> hidden limit VariableSymbol.
-        # We keep this out of the AST because the analyzer does not currently
-        # traverse the full tree and won't rewrite nodes in-place.
+        # Maps id(for_node) -> hidden limit VariableSymbol for FOR loops.
         self.for_limits = {}
         
         self.scopes["global"] = {}
         self.procedures = {}
 
-        # Fixed call interface layout: for each procedure name, store a list
-        # of parameter cell offsets that act as the "call area" for that
-        # procedure. Codegen writes actual argument addresses there before CALL.
-        # This avoids relying on procedure-local scope offsets during codegen.
+        # Stores parameter cell offsets for each procedure for codegen.
         self.proc_param_cells = {}
 
     def enter_scope(self, name):
@@ -28,7 +34,7 @@ class SemanticAnalyzer:
     def exit_scope(self):
         self.current_scope_name = "global"
 
-    def get_symbol(self, name):
+    def get_symbol(self, name, node=None):
         current_scope = self.scopes[self.current_scope_name]
         if name in current_scope:
             return current_scope[name]
@@ -37,16 +43,25 @@ class SemanticAnalyzer:
         if name in global_scope:
             return global_scope[name]
         
-        raise Exception(f"Error: Variable '{name}' not declared in scope '{self.current_scope_name}' or global scope.")
+        raise SemanticError(
+            f"Variable '{name}' not declared in scope '{self.current_scope_name}' or global scope.",
+            location=self._loc_from_node(node),
+        )
 
-    def declare_variable(self, name, is_array=False, range_start=0, range_end=0):
+    def declare_variable(self, name, is_array=False, range_start=0, range_end=0, node=None):
         current_scope = self.scopes[self.current_scope_name]
         if name in current_scope:
-            raise Exception(f"Error: Variable '{name}' already declared in scope '{self.current_scope_name}'")
+            raise SemanticError(
+                f"Variable '{name}' already declared in scope '{self.current_scope_name}'",
+                location=self._loc_from_node(node),
+            )
 
         if is_array:
             if range_start > range_end:
-                raise Exception(f"Error: Invalid array range [{range_start}:{range_end}] for '{name}'")
+                raise SemanticError(
+                    f"Invalid array range [{range_start}:{range_end}] for '{name}'",
+                    location=self._loc_from_node(node),
+                )
             
             size = range_end - range_start + 1
             symbol = ArraySymbol(name, self.current_scope_name, self.memory_counter, range_start, range_end)
@@ -93,7 +108,10 @@ class SemanticAnalyzer:
         target_sym = self.visit_identifier(identifier_node, is_write=True)
         
         if target_sym.is_const:
-            raise Exception(f"Error: Cannot modify constant or iterator '{target_sym.name}'")
+            raise SemanticError(
+                f"Cannot modify constant or iterator '{target_sym.name}'",
+                location=self._loc_from_node(node),
+            )
 
         self.visit_expression(expression)
         
@@ -103,7 +121,10 @@ class SemanticAnalyzer:
     def visit_read(self, node):
         target_sym = self.visit_identifier(node[1], is_write=True)
         if target_sym.is_const:
-            raise Exception(f"Error: Cannot READ into constant '{target_sym.name}'")
+            raise SemanticError(
+                f"Cannot READ into constant '{target_sym.name}'",
+                location=self._loc_from_node(node),
+            )
         target_sym.is_initialized = True
 
     def visit_write(self, node):
@@ -114,8 +135,11 @@ class SemanticAnalyzer:
     def visit_if(self, node):
         self.visit_condition(node[1])
         self.visit_commands(node[2])
-        if len(node) > 3:
-            self.visit_commands(node[3])
+        # node shape:
+        # - ('IF', cond, then_cmds, else_cmds, lineno)
+        else_cmds = node[3] if len(node) >= 4 and isinstance(node[3], list) else []
+        if else_cmds:
+            self.visit_commands(else_cmds)
 
     def visit_while(self, node):
         self.visit_condition(node[1])
@@ -162,13 +186,19 @@ class SemanticAnalyzer:
         call_args = node[2]
         
         if pname not in self.procedures:
-            raise Exception(f"Error: Call to undefined procedure '{pname}'")
+            raise SemanticError(
+                f"Call to undefined procedure '{pname}'",
+                location=self._loc_from_node(node),
+            )
         
         proc_def = self.procedures[pname]
         def_args = proc_def.args
         
         if len(call_args) != len(def_args):
-            raise Exception(f"Error: Procedure '{pname}' expects {len(def_args)} arguments, got {len(call_args)}")
+            raise SemanticError(
+                f"Procedure '{pname}' expects {len(def_args)} arguments, got {len(call_args)}",
+                location=self._loc_from_node(node),
+            )
 
         for i, (call_arg_name, def_arg_tuple) in enumerate(zip(call_args, def_args)):
             def_type = def_arg_tuple[0]
@@ -177,10 +207,16 @@ class SemanticAnalyzer:
             
             if def_type == 'ARG_ARRAY':
                 if not sym.is_array:
-                    raise Exception(f"Error: Argument {i+1} of '{pname}' expects an Array, got variable '{call_arg_name}'")
+                    raise SemanticError(
+                        f"Argument {i+1} of '{pname}' expects an Array, got variable '{call_arg_name}'",
+                        location=self._loc_from_node(node),
+                    )
             else:
                 if sym.is_array:
-                    raise Exception(f"Error: Argument {i+1} of '{pname}' expects a Variable, got Array '{call_arg_name}'")
+                    raise SemanticError(
+                        f"Argument {i+1} of '{pname}' expects a Variable, got Array '{call_arg_name}'",
+                        location=self._loc_from_node(node),
+                    )
 
             if not sym.is_array and not sym.is_initialized:
                  if def_type != 'ARG_OUTPUT':
@@ -197,7 +233,10 @@ class SemanticAnalyzer:
             elif tag in ['PIDENTIFIER', 'PIDENTIFIER_WITH_PID', 'PIDENTIFIER_WITH_NUM']:
                 sym = self.visit_identifier(node, is_write=False)
                 if not sym.is_array and not sym.is_initialized:
-                    raise Exception(f"Error: Usage of uninitialized variable '{sym.name}'")
+                    raise SemanticError(
+                        f"Usage of uninitialized variable '{sym.name}'",
+                        location=self._loc_from_node(node),
+                    )
             elif tag == 'NUMBER':
                 pass
 
@@ -212,24 +251,33 @@ class SemanticAnalyzer:
     def visit_identifier(self, node, is_write=False, enforce_checks=True):
         tag = node[0]
         name = node[1]
-        sym = self.get_symbol(name)
+        sym = self.get_symbol(name, node=node)
         
         if tag == 'PIDENTIFIER':
             if sym.is_array:
-                 raise Exception(f"Error: Array '{name}' used without index")
+                 raise SemanticError(
+                     f"Array '{name}' used without index",
+                     location=self._loc_from_node(node),
+                 )
         
         else:
             if not sym.is_array:
-                raise Exception(f"Error: Variable '{name}' accessed as array")
+                raise SemanticError(
+                    f"Variable '{name}' accessed as array",
+                    location=self._loc_from_node(node),
+                )
             
             if tag == 'PIDENTIFIER_WITH_PID':
                 index_var_name = node[2]
-                idx_sym = self.get_symbol(index_var_name)
+                idx_sym = self.get_symbol(index_var_name, node=node)
                 
                 # === CHANGE START ===
                 # Only check initialization if we are in the analysis phase
                 if enforce_checks and not idx_sym.is_initialized:
-                     raise Exception(f"Error: Array index '{index_var_name}' is uninitialized")
+                     raise SemanticError(
+                         f"Array index '{index_var_name}' is uninitialized",
+                         location=self._loc_from_node(node),
+                     )
                 # === CHANGE END ===
         
         return sym
@@ -242,7 +290,7 @@ class SemanticAnalyzer:
             
         self.visit_main(main)
         
-        print(f"Analysis Complete. Total Memory Used: {self.memory_counter} cells.")
+    # Keep analyzer silent by default; the CLI can print memory usage if needed.
 
     def visit_procedure(self, node):
         proc_name = node[1]
@@ -250,14 +298,12 @@ class SemanticAnalyzer:
         declarations = node[3]
         
         if proc_name in self.procedures:
-            raise Exception(f"Error: Procedure '{proc_name}' already defined.")
+            raise SemanticError(f"Procedure '{proc_name}' already defined.")
         
         self.procedures[proc_name] = ProcedureSymbol(proc_name, args)
         self.enter_scope(proc_name)
 
-        # Reserve parameter cells in memory for this procedure.
-        # They live in the procedure scope dictionary for semantic checks,
-        # but their offsets are also recorded in a stable list used by codegen.
+        # Reserve memory for procedure parameters.
         self.proc_param_cells[proc_name] = []
 
         for arg in args:
@@ -266,11 +312,9 @@ class SemanticAnalyzer:
 
             sym = self.declare_variable(arg_name) 
             sym.is_param = True
-            # Calling convention / semantics:
-            # - Default (IN-OUT) params are passed by reference.
-            # - 'O' params are write-only but still passed by reference.
-            # - 'I' params are read-only constants and (in this compiler)
-            #   are passed by VALUE to keep them immutable.
+            # Parameter semantics:
+            # - Default (IN-OUT) and 'O' params: passed by reference.
+            # - 'I' params: read-only, passed by value.
             sym.is_reference = arg_type != 'ARG_INPUT'
             if arg_type == 'ARG_INPUT':
                 sym.is_const = True
@@ -286,9 +330,9 @@ class SemanticAnalyzer:
 
         for decl in declarations:
             if decl[0] == 'VAR':
-                self.declare_variable(decl[1])
+                self.declare_variable(decl[1], node=decl)
             elif decl[0] == 'ARRAY':
-                self.declare_variable(decl[1], is_array=True, range_start=decl[2], range_end=decl[3])
+                self.declare_variable(decl[1], is_array=True, range_start=decl[2], range_end=decl[3], node=decl)
         
         self.exit_scope()
 
@@ -298,8 +342,8 @@ class SemanticAnalyzer:
         declarations = node[1]
         for decl in declarations:
             if decl[0] == 'VAR':
-                self.declare_variable(decl[1])
+                self.declare_variable(decl[1], node=decl)
             elif decl[0] == 'ARRAY':
-                self.declare_variable(decl[1], is_array=True, range_start=decl[2], range_end=decl[3])
+                self.declare_variable(decl[1], is_array=True, range_start=decl[2], range_end=decl[3], node=decl)
 
         self.exit_scope()

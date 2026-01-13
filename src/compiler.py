@@ -4,6 +4,7 @@ from my_lexer import MyLexer
 from my_parser import MyParser
 from semantic_analyzer import SemanticAnalyzer
 from code_generator import CodeGenerator
+from schemas import CompilationError
 
 if __name__ == '__main__':
     lexer = MyLexer()
@@ -33,22 +34,23 @@ if __name__ == '__main__':
         for token in lexer.tokenize(text):
             print(token)
 
-    ast = parser.parse(lexer.tokenize(text))
+    try:
+        ast = parser.parse(lexer.tokenize(text))
 
-    if verbose:
-        print("\n\nAST:")
-        pp = pprint.PrettyPrinter(indent=4)
-        pp.pprint(ast)
-    
-    
-    ast = parser.parse(lexer.tokenize(text))
-    if ast:
+        if verbose:
+            print("\n\nAST:")
+            pp = pprint.PrettyPrinter(indent=4)
+            pp.pprint(ast)
+
         analyzer = SemanticAnalyzer()
         analyzer.analyze(ast)
         generator = CodeGenerator(analyzer)
-        if verbose: generator.verbose = True
+        if verbose:
+            generator.verbose = True
         generated_code = generator.generate(ast)
         with open(output_file, 'w') as f:
             f.write("\n".join(generated_code))
-    else:
-        print("Parsing failed; no code generated.")
+    except CompilationError as e:
+        # User program error: include kind + position.
+        print(str(e), file=sys.stderr)
+        sys.exit(1)

@@ -281,11 +281,12 @@ class CodeGenerator:
         self.gen_condition(cond, false_label) # Jump if FALSE
         self.visit_commands(cmd[2])
         
-        if len(cmd) > 3: # Has ELSE
+        has_else = len(cmd) > 3 and isinstance(cmd[3], list) and len(cmd[3]) > 0
+        if has_else:
             self.emit(f"JUMP {end_label}")
             
         self.emit(f"{false_label}:", label=True)
-        if len(cmd) > 3:
+        if has_else:
             self.visit_commands(cmd[3])
             self.emit(f"{end_label}:", label=True)
 

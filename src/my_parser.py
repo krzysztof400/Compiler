@@ -1,5 +1,6 @@
 from sly import Parser
 from my_lexer import MyLexer
+from schemas import SyntaxError as CompilationSyntaxError, SourceLocation
 
 class MyParser(Parser):
     tokens = MyLexer.tokens
@@ -53,43 +54,44 @@ class MyParser(Parser):
 
     @_('identifier ASSIGN expression ";"')
     def command(self, p):
-        return ('ASSIGN', p.identifier, p.expression)
+        return ('ASSIGN', p.identifier, p.expression, p.lineno)
 
     @_('IF condition THEN commands ELSE commands ENDIF')
     def command(self, p):
-        return ('IF', p.condition, p.commands0, p.commands1)
+        return ('IF', p.condition, p.commands0, p.commands1, p.lineno)
 
     @_('IF condition THEN commands ENDIF')
     def command(self, p):
-        return ('IF', p.condition, p.commands, [])
+        return ('IF', p.condition, p.commands, [], p.lineno)
 
     @_('WHILE condition DO commands ENDWHILE')
     def command(self, p):
-        return ('WHILE', p.condition, p.commands)
+        return ('WHILE', p.condition, p.commands, p.lineno)
 
     @_('REPEAT commands UNTIL condition ";"')
     def command(self, p):
-        return ('REPEAT', p.commands, p.condition)
+        return ('REPEAT', p.commands, p.condition, p.lineno)
 
     @_('FOR PID FROM value TO value DO commands ENDFOR')
     def command(self, p):
-        return ('FOR_TO', p.PID, p.value0, p.value1, p.commands)
+        return ('FOR_TO', p.PID, p.value0, p.value1, p.commands, p.lineno)
 
     @_('FOR PID FROM value DOWNTO value DO commands ENDFOR')
     def command(self, p):
-        return ('FOR_DOWNTO', p.PID, p.value0, p.value1, p.commands)
+        return ('FOR_DOWNTO', p.PID, p.value0, p.value1, p.commands, p.lineno)
 
     @_('proc_call ";"')
     def command(self, p):
+        # proc_call already has lineno attached
         return p.proc_call
 
     @_('READ identifier ";"')
     def command(self, p):
-        return ('READ', p.identifier)
+        return ('READ', p.identifier, p.lineno)
 
     @_('WRITE value ";"')
     def command(self, p):
-        return ('WRITE', p.value)
+        return ('WRITE', p.value, p.lineno)
 
     # --- PROCEDURE HEAD & CALLS ---
 
@@ -99,7 +101,7 @@ class MyParser(Parser):
 
     @_('PID "(" args ")"')
     def proc_call(self, p):
-        return ('PROC_CALL', p.PID, p.args)
+        return ('PROC_CALL', p.PID, p.args, p.lineno)
 
     # --- ARGUMENT DECLARATIONS ---
     # args_decl -> args_decl, PID
@@ -162,26 +164,23 @@ class MyParser(Parser):
 
     @_('declarations "," PID')
     def declarations(self, p):
-        p.declarations.append(('VAR', p.PID))
+        p.declarations.append(('VAR', p.PID, p.lineno))
         return p.declarations
 
     @_('declarations "," PID "[" NUM ":" NUM "]"')
     def declarations(self, p):
-        p.declarations.append(('ARRAY', p.PID, p.NUM0, p.NUM1))
+        p.declarations.append(('ARRAY', p.PID, p.NUM0, p.NUM1, p.lineno))
         return p.declarations
 
     @_('PID')
     def declarations(self, p):
-        return [('VAR', p.PID)]
+        return [('VAR', p.PID, p.lineno)]
 
     @_('PID "[" NUM ":" NUM "]"')
     def declarations(self, p):
-        return [('ARRAY', p.PID, p.NUM0, p.NUM1)]
+        return [('ARRAY', p.PID, p.NUM0, p.NUM1, p.lineno)]
 
     # --- EXPRESSIONS ---
-    # Grammar allows: expression -> value op value
-    # To avoid missing "expression" when it's just a single value (common in assignments),
-    # include the base case: expression -> value.
 
     @_('value')
     def expression(self, p):
@@ -237,7 +236,7 @@ class MyParser(Parser):
 
     @_('NUM')
     def value(self, p):
-        return ('NUMBER', p.NUM)
+        return ('NUMBER', p.NUM, p.lineno)
 
     @_('identifier')
     def value(self, p):
@@ -247,22 +246,23 @@ class MyParser(Parser):
 
     @_('PID')
     def identifier(self, p):
-        return ('PIDENTIFIER', p.PID)
+        return ('PIDENTIFIER', p.PID, p.lineno)
 
     @_('PID "[" PID "]"')
     def identifier(self, p):
-        return ('PIDENTIFIER_WITH_PID', p.PID0, p.PID1)
+        return ('PIDENTIFIER_WITH_PID', p.PID0, p.PID1, p.lineno)
 
     @_('PID "[" NUM "]"')
     def identifier(self, p):
-        return ('PIDENTIFIER_WITH_NUM', p.PID, p.NUM)
+        return ('PIDENTIFIER_WITH_NUM', p.PID, p.NUM, p.lineno)
 
     # --- ERROR HANDLING ---
 
     def error(self, p):
         if p:
-            print(f"Syntax error at token {p.type}, line {p.lineno}, value {p.value}")
-            exit(1)
+            raise CompilationSyntaxError(
+                f"Unexpected token {p.type} (value={p.value})",
+                location=SourceLocation(p.lineno),
+            )
         else:
-            print("Syntax error: Unexpected End of File")
-            exit(1)
+            raise CompilationSyntaxError("Unexpected end of file")
