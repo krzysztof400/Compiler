@@ -4,19 +4,6 @@ class CodeGenerator:
         self.code = []
         self.proc_ret_offsets = {}
         self.verbose = False
-        # Temporary memory cells used by codegen helpers (comparison helpers)
-        # Reserve two global temporary cells to avoid clobbering registers
-        try:
-            self._cmp_tmp1 = self.analyzer.declare_variable('_cmp_tmp1')
-            self._cmp_tmp2 = self.analyzer.declare_variable('_cmp_tmp2')
-            # mark them initialized so semantic checks ignore them
-            self._cmp_tmp1.is_initialized = True
-            self._cmp_tmp2.is_initialized = True
-        except Exception:
-            # If analyzer already declared these (e.g., on repeated codegen runs), just fetch them
-            scope = self.analyzer.scopes.get(self.analyzer.current_scope_name, {})
-            self._cmp_tmp1 = scope.get('_cmp_tmp1') or self.analyzer.scopes['global'].get('_cmp_tmp1')
-            self._cmp_tmp2 = scope.get('_cmp_tmp2') or self.analyzer.scopes['global'].get('_cmp_tmp2')
 
     def generate(self, ast):
         # AST: ('PROGRAM', procedures, main)
@@ -529,17 +516,18 @@ class CodeGenerator:
         self.emit("SWP c") # Dividend
         self.gen_expression(node2)
         self.emit("SWP d") # Divisor
-        
-        end_lbl = f"dm_end_{id(node1)}_{id(node2)}"
-        
-        # Check div 0
+
+        final_lbl = f"dm_end_{id(node1)}_{id(node2)}"
+
+        # Check div 0: if divisor is zero, jump to handler that zeroes results
         self.emit("RST a")
         self.emit("ADD d")
-        self.emit(f"JZERO {end_lbl}") # Result a=0 is correct
-        
-        self.emit("RST e") # Quotient
-        self.emit("RST a") # Remainder will be in c at end
-        
+        div_zero_label = f"div_zero_{id(node1)}_{id(node2)}"
+        self.emit(f"JZERO {div_zero_label}")
+
+        # Initialize quotient accumulator
+        self.emit("RST e")
+
         loop = f"dm_loop_{id(node1)}"
         self.emit(f"{loop}:", label=True)
         
@@ -555,7 +543,7 @@ class CodeGenerator:
         self.emit("RST a")
         self.emit("ADD d")
         self.emit("SUB c")
-        self.emit(f"JPOS {end_lbl}") 
+        self.emit(f"JPOS {final_lbl}") 
         # If d > c, jump. If d == c, result 0, no jump.
         
         # Find largest shift
@@ -604,8 +592,15 @@ class CodeGenerator:
         self.emit("SWP e")
         
         self.emit(f"JUMP {loop}")
-        
-        self.emit(f"{end_lbl}:", label=True)
+
+        # Divisor-zero handler: place both quotient and remainder as 0
+        self.emit(f"{div_zero_label}:", label=True)
+        self.emit("RST e")
+        self.emit("RST c")
+        self.emit(f"JUMP {final_lbl}")
+
+        # Final label: select which register (quotient or remainder) to put into a
+        self.emit(f"{final_lbl}:", label=True)
         self.emit("RST a")
         if quotient:
             self.emit("ADD e")
