@@ -1,29 +1,9 @@
-import sys
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.append(str(REPO_ROOT / "src"))
-
-from my_lexer import MyLexer
-from my_parser import MyParser
-from semantic_analyzer import SemanticAnalyzer
-from code_generator import CodeGenerator
-
-
-def _compile_to_mr(source: str) -> str:
-    lexer = MyLexer()
-    parser = MyParser()
-    ast = parser.parse(lexer.tokenize(source))
-    assert ast is not None, "Parsing failed: AST is None"
-
-    analyzer = SemanticAnalyzer()
-    analyzer.analyze(ast)
-
-    gen = CodeGenerator(analyzer)
-    code = gen.generate(ast)
-    return "\n".join(code) + "\n"
+from tests.helpers import compile_source_to_mr, extract_ints
 
 
 @pytest.fixture
@@ -44,7 +24,7 @@ IN
   WRITE t;
 END
 """
-    mr = _compile_to_mr(prog)
+    mr = compile_source_to_mr(prog)
     mr_path = tmp_path / "prog.mr"
     mr_path.write_text(mr)
     return mr_path
@@ -62,9 +42,11 @@ def run_program(mr_path: Path, a: int, b: int):
         timeout=1,
         check=False,
     )
-    out = res.stdout.decode(errors="replace")
-    nums = [int(tok) for tok in out.replace("?", " ").replace(">", " ").split() if tok.isdigit()]
-    assert len(nums) >= 4, f"Expected at least 4 numeric outputs, got {len(nums)}. Raw output: {out!r}"
+    nums = extract_ints(res.stdout, allow_negative=False)
+    assert len(nums) >= 4, (
+        f"Expected at least 4 numeric outputs, got {len(nums)}. "
+        f"Raw output: {res.stdout.decode(errors='replace')!r}"
+    )
     return nums[-4], nums[-3], nums[-2], nums[-1]
 
 
