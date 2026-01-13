@@ -1,49 +1,18 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "exampleA.imp"
 
-# Compiler entrypoint uses flat imports
-sys.path.append(str(REPO_ROOT / "src"))
-
-from my_lexer import MyLexer
-from my_parser import MyParser
-from semantic_analyzer import SemanticAnalyzer
-from code_generator import CodeGenerator
-
-
-def _compile_fixture_to_mr(tmp_path: Path) -> Path:
-    text = FIXTURE.read_text()
-
-    lexer = MyLexer()
-    parser = MyParser()
-    ast = parser.parse(lexer.tokenize(text))
-    assert ast is not None
-
-    analyzer = SemanticAnalyzer()
-    analyzer.analyze(ast)
-
-    gen = CodeGenerator(analyzer)
-    mr_lines = gen.generate(ast)
-
-    mr_path = tmp_path / "exampleA.mr"
-    mr_path.write_text("\n".join(mr_lines) + "\n")
-    return mr_path
-
-
-def _extract_ints(stdout: bytes) -> list[int]:
-    out = stdout.decode(errors="replace")
-    return [int(tok) for tok in out.replace("?", " ").replace(">", " ").split() if tok.lstrip("-").isdigit()]
+from tests.helpers import compile_fixture_to_mr_path, extract_ints
 
 
 def test_exampleA_array_indexing_and_arithmetic(tmp_path: Path):
     """exampleA builds arrays ta,tb then uses them to fill tc and prints tc[0..24]."""
 
-    mr_path = _compile_fixture_to_mr(tmp_path)
+    mr_path = compile_fixture_to_mr_path(fixture_path=FIXTURE, tmp_path=tmp_path)
 
     vm = REPO_ROOT / "VM" / "maszyna-wirtualna"
     proc = subprocess.run(
@@ -56,7 +25,7 @@ def test_exampleA_array_indexing_and_arithmetic(tmp_path: Path):
     )
 
     assert proc.returncode == 0, proc.stderr.decode(errors="replace")
-    nums = _extract_ints(proc.stdout)
+    nums = extract_ints(proc.stdout)
 
     # Recompute expected output from the program semantics.
     n = 24
