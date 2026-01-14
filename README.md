@@ -20,7 +20,7 @@ The compiler operates in several phases:
 
 ## Requirements
 - Python 3.6+
-- SLY library
+- UV package manager
 
 ## Project Structure
 
