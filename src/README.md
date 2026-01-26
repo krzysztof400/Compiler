@@ -8,12 +8,14 @@
 
 ### Uruchamianie kompilatora
 ```bash
-uv run python compiler.py examples/programs/factorial.imp -o output.asm
+uv run python compiler.py examples/programs/factorial.imp output.asm
 ```
 lub bez uv:
 ```bash
-python compiler.py examples/programs/factorial.imp -o output.asm
+python compiler.py examples/programs/factorial.imp output.asm
 ```
+
+można użyć flagi -v do włączenia trybu verbose
 
 ### Opis plików źródłowych
 Kompilator jest napisany w Pythonie 3. Kod jest podzielony na kilka modułów:
@@ -23,6 +25,7 @@ Kompilator jest napisany w Pythonie 3. Kod jest podzielony na kilka modułów:
 - `code_generator.py`: generuje kod asemblerowy dla wirtualnej maszyny na podstawie struktury instrukcji.
 - `compiler.py`: główny plik uruchomieniowy kompilatora, który integruje wszystkie moduły i obsługuje wejście/wyjście.
 
+Przesłane pliki to pełna implementacja kompilatora. Oprócz tego w repozytorium znajdują się testy, których jednak zdecydowałem się nie przesyłać, aby nie zaśmiecać rozwiązania. 
 
 ## Project Description
 This project is a compiler for a simple imperative programming language. The compiler translates source code written in a defined complete high-level language (supporting procedures, FOR/WHILE/REPEAT loops, conditional statements, and arrays) into assembly code for a specific Virtual Machine (VM).
