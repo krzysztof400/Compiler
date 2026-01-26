@@ -124,16 +124,36 @@ class CodeGenerator:
     def gen_expression(self, node):
         if isinstance(node, tuple):
             tag = node[0]
+            def is_number(n):
+                return isinstance(n, tuple) and n[0] == 'NUMBER'
+
             if tag == 'NUMBER':
                 self.gen_constant(node[1])
             elif tag in ['PIDENTIFIER', 'PIDENTIFIER_WITH_PID', 'PIDENTIFIER_WITH_NUM']:
                 self.load_value(node)
             elif tag == 'ADD':
+                left, right = node[1], node[2]
+                if is_number(left) and is_number(right):
+                    self.gen_constant(left[1] + right[1])
+                    return
+                if is_number(left) and left[1] == 0:
+                    self.gen_expression(right)
+                    return
+                if is_number(right) and right[1] == 0:
+                    self.gen_expression(left)
+                    return
                 self.gen_expression(node[1])
                 self.emit("SWP h")
                 self.gen_expression(node[2])
                 self.emit("ADD h")
             elif tag == 'SUB':
+                left, right = node[1], node[2]
+                if is_number(left) and is_number(right):
+                    self.gen_constant(max(left[1] - right[1], 0))
+                    return
+                if is_number(right) and right[1] == 0:
+                    self.gen_expression(left)
+                    return
                 # max(a-b, 0)
                 self.gen_expression(node[1])
                 self.emit("SWP h")
@@ -141,10 +161,43 @@ class CodeGenerator:
                 self.emit("SWP h")
                 self.emit("SUB h")
             elif tag == 'MUL':
+                left, right = node[1], node[2]
+                if (is_number(left) and left[1] == 0) or (is_number(right) and right[1] == 0):
+                    self.gen_constant(0)
+                    return
+                if is_number(left) and left[1] == 1:
+                    self.gen_expression(right)
+                    return
+                if is_number(right) and right[1] == 1:
+                    self.gen_expression(left)
+                    return
+                if is_number(left) and is_number(right):
+                    self.gen_constant(left[1] * right[1])
+                    return
                 self.gen_mul(node[1], node[2])
             elif tag == 'DIV':
+                left, right = node[1], node[2]
+                if is_number(left) and is_number(right):
+                    if right[1] == 0:
+                        self.gen_constant(0)
+                    else:
+                        self.gen_constant(left[1] // right[1])
+                    return
+                if is_number(right) and right[1] == 1:
+                    self.gen_expression(left)
+                    return
                 self.gen_div(node[1], node[2])
             elif tag == 'MOD':
+                left, right = node[1], node[2]
+                if is_number(left) and is_number(right):
+                    if right[1] == 0:
+                        self.gen_constant(0)
+                    else:
+                        self.gen_constant(left[1] % right[1])
+                    return
+                if is_number(right) and right[1] == 1:
+                    self.gen_constant(0)
+                    return
                 self.gen_mod(node[1], node[2])
 
     def load_value(self, identifier_node):
@@ -428,26 +481,11 @@ class CodeGenerator:
         self.emit("SWP d")
 
         # c = LHS, d = RHS
-        # Helper: check (x - y)
-        def sub_regs(reg_x, reg_y):
-            self.emit("RST a")
-            self.emit(f"ADD {reg_x}")
-            self.emit(f"SWP b")
-            self.emit("RST a")
-            self.emit(f"ADD {reg_y}")
-            self.emit("SUB b") # y - x (careful with order, we want reg_x - reg_y usually)
-
-        # Correct Subtraction logic for VM: a - b
-        # Load x to a, y to b, SUB b
         def check_diff(reg_x, reg_y):
             # Returns a = max(reg_x - reg_y, 0)
             self.emit("RST a")
             self.emit(f"ADD {reg_x}")
-            self.emit("SWP b")
-            self.emit("RST a")
-            self.emit(f"ADD {reg_y}")
-            self.emit("SWP b")
-            self.emit("SUB b")
+            self.emit(f"SUB {reg_y}")
 
         if op == 'EQ':
             # False if c != d. (c > d OR d > c)
