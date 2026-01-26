@@ -376,8 +376,45 @@ class CodeGenerator:
     # --- CONTROL FLOW ---
 
     def gen_assign(self, cmd):
-        self.gen_expression(cmd[2])
-        self.store_to_variable(cmd[1])
+        target = cmd[1]
+        expr = cmd[2]
+
+        def is_number(node, value=None):
+            return isinstance(node, tuple) and node[0] == 'NUMBER' and (value is None or node[1] == value)
+
+        def is_identifier(node):
+            return isinstance(node, tuple) and node[0] in {
+                'PIDENTIFIER', 'PIDENTIFIER_WITH_PID', 'PIDENTIFIER_WITH_NUM'
+            }
+
+        def same_identifier(lhs, rhs):
+            if not (is_identifier(lhs) and is_identifier(rhs)):
+                return False
+            return lhs[0] == rhs[0] and lhs[1:-1] == rhs[1:-1]
+
+        if isinstance(expr, tuple):
+            tag = expr[0]
+            left, right = expr[1], expr[2]
+            if tag == 'ADD':
+                if same_identifier(target, left) and is_number(right, 1):
+                    self.load_value(target)
+                    self.emit("INC a")
+                    self.store_to_variable(target)
+                    return
+                if same_identifier(target, right) and is_number(left, 1):
+                    self.load_value(target)
+                    self.emit("INC a")
+                    self.store_to_variable(target)
+                    return
+            elif tag == 'SUB':
+                if same_identifier(target, left) and is_number(right, 1):
+                    self.load_value(target)
+                    self.emit("DEC a")
+                    self.store_to_variable(target)
+                    return
+
+        self.gen_expression(expr)
+        self.store_to_variable(target)
 
     def gen_read(self, cmd):
         self.emit("READ")
