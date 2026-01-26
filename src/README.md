@@ -82,4 +82,4 @@ Test inputs live in `tests/fixtures/` and `examples/programs/`.
 Tests measure both correctness (by running the compiled code on the VM and checking output) and efficiency (by measuring the cost of generated assembly code).
 
 ### Efficiency measurements
-Efficiency tests are located in `tests/efficency.md`. They track the cost of generated assembly code over time as optimizations are implemented. Each section documents the total cost after specific optimizations, allowing for comparison and verification of improvements.
+Efficiency tests are located in [`tests/efficiency.md`](tests/efficiency.md). They track the cost of generated assembly code over time as optimizations are implemented. Each section documents the total cost after specific optimizations, allowing for comparison and verification of improvements.
