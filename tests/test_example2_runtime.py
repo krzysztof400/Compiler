@@ -22,10 +22,12 @@ from tests.helpers import compile_fixture_to_mr_path, extract_ints
     ],
 )
 def test_example2_nested_procs_swap_even_times(tmp_path: Path, a: int, b: int):
-    """example2 applies nested procedures that repeatedly swap (a,b).
+    """example2 applies nested procedures that repeatedly transform (a,b).
 
-    pd() calls pa() 2^4 * 4 = 16 times total, so (a,b) should end up swapped
-    compared to the input.
+    pa(a,b) computes: a := a + b; b := a - b
+    That is equivalent to (a,b) -> (a+b, a).
+
+    pd() calls pa() 24 times total (2 * 3 * 4), so we simulate that here.
     """
 
     mr_path = compile_fixture_to_mr_path(fixture_path=FIXTURE, tmp_path=tmp_path)
@@ -45,4 +47,7 @@ def test_example2_nested_procs_swap_even_times(tmp_path: Path, a: int, b: int):
     nums = extract_ints(proc.stdout)
     assert len(nums) >= 2
     out_a, out_b = nums[-2], nums[-1]
-    assert (out_a, out_b) == (b, a)
+    exp_a, exp_b = a, b
+    for _ in range(24):
+        exp_a, exp_b = exp_a + exp_b, exp_a
+    assert (out_a, out_b) == (exp_a, exp_b)

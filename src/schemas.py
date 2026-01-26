@@ -27,6 +27,7 @@ class VariableSymbol(Symbol):
         self.is_const = False
         self.is_initialized = False
         self.is_iterator = False
+        self.is_output = False
 
 
 class ArraySymbol(Symbol):
@@ -39,6 +40,10 @@ class ArraySymbol(Symbol):
         self.is_array = True
         self.is_param = False
         self.is_reference = False
+        self.is_const = False
+        self.is_initialized = False
+        self.is_iterator = False
+        self.is_output = False
 
     @property
     def size(self):

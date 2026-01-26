@@ -125,17 +125,17 @@ class CodeGenerator:
             elif tag in ['PIDENTIFIER', 'PIDENTIFIER_WITH_PID', 'PIDENTIFIER_WITH_NUM']:
                 self.load_value(node)
             elif tag == 'ADD':
-                self.gen_expression(node[1]) 
-                self.emit("SWP b")          
-                self.gen_expression(node[2]) 
-                self.emit("ADD b")          
+                self.gen_expression(node[1])
+                self.emit("SWP h")
+                self.gen_expression(node[2])
+                self.emit("ADD h")
             elif tag == 'SUB':
                 # max(a-b, 0)
-                self.gen_expression(node[1]) # LHS -> a
-                self.emit("SWP b")
-                self.gen_expression(node[2]) # RHS -> a
-                self.emit("SWP b") # a=LHS, b=RHS
-                self.emit("SUB b") 
+                self.gen_expression(node[1])
+                self.emit("SWP h")
+                self.gen_expression(node[2])
+                self.emit("SWP h")
+                self.emit("SUB h")
             elif tag == 'MUL':
                 self.gen_mul(node[1], node[2])
             elif tag == 'DIV':
@@ -164,7 +164,12 @@ class CodeGenerator:
                 self.load_value(('PIDENTIFIER', idx_name))
             
             # 2. Subtract start_idx
-            if sym.start_idx != 0:
+            if getattr(sym, "start_idx_offset", None) is not None:
+                self.emit("SWP b")
+                self.emit(f"LOAD {sym.start_idx_offset}")
+                self.emit("SWP b")
+                self.emit("SUB b")
+            elif sym.start_idx != 0:
                 self.emit("SWP b")
                 self.gen_constant(sym.start_idx)
                 self.emit("SWP b")
@@ -172,7 +177,10 @@ class CodeGenerator:
             
             # 3. Add base offset
             self.emit("SWP b")
-            self.gen_constant(sym.mem_offset)
+            if getattr(sym, 'is_reference', False):
+                self.emit(f"LOAD {sym.mem_offset}")
+            else:
+                self.gen_constant(sym.mem_offset)
             self.emit("ADD b") 
             
             # 4. Indirect Load
@@ -205,7 +213,12 @@ class CodeGenerator:
                 self.load_value(('PIDENTIFIER', identifier_node[2]))
             
             # Subtract start
-            if sym.start_idx != 0:
+            if getattr(sym, "start_idx_offset", None) is not None:
+                self.emit("SWP b")
+                self.emit(f"LOAD {sym.start_idx_offset}")
+                self.emit("SWP b")
+                self.emit("SUB b")
+            elif sym.start_idx != 0:
                 self.emit("SWP b")
                 self.gen_constant(sym.start_idx)
                 self.emit("SWP b")
@@ -213,7 +226,10 @@ class CodeGenerator:
             
             # Add offset
             self.emit("SWP b")
-            self.gen_constant(sym.mem_offset)
+            if getattr(sym, 'is_reference', False):
+                self.emit(f"LOAD {sym.mem_offset}")
+            else:
+                self.gen_constant(sym.mem_offset)
             self.emit("ADD b") 
             
             self.emit("SWP b") # b = address
@@ -231,30 +247,37 @@ class CodeGenerator:
         except KeyError:
              raise Exception(f"Internal Error: No memory map for {proc_name}")
 
-        for i, ((def_arg, actual_name), param_offset) in enumerate(zip(zip(proc_def.args, arg_names), param_cells)):
+        for i, ((def_arg, actual_name), param_info) in enumerate(zip(zip(proc_def.args, arg_names), param_cells)):
             def_type = def_arg[0]
             actual_sym = self.analyzer.get_symbol(actual_name)
 
             if def_type == 'ARG_INPUT': 
                 # Pass by Value (Copy)
                 self.load_value(('PIDENTIFIER', actual_name))
-                self.emit(f"STORE {param_offset}")
+                self.emit(f"STORE {param_info['base']}")
             else:
                 # Pass by Reference (Pass Address)
                 if actual_sym.is_array:
-                    # Array Ref: if passing a reference to a reference, load the pointer
+                    # Array Ref: load or compute base address
                     if getattr(actual_sym, 'is_reference', False):
                         self.emit(f"LOAD {actual_sym.mem_offset}")
                     else:
                         self.gen_constant(actual_sym.mem_offset)
+                    self.emit(f"STORE {param_info['base']}")
+
+                    if param_info.get('start') is not None:
+                        if getattr(actual_sym, 'start_idx_offset', None) is not None:
+                            self.emit(f"LOAD {actual_sym.start_idx_offset}")
+                        else:
+                            self.gen_constant(actual_sym.start_idx)
+                        self.emit(f"STORE {param_info['start']}")
                 else:
                     # Scalar Ref
                     if getattr(actual_sym, 'is_reference', False):
                         self.emit(f"LOAD {actual_sym.mem_offset}")
                     else:
                         self.gen_constant(actual_sym.mem_offset)
-                
-                self.emit(f"STORE {param_offset}")
+                    self.emit(f"STORE {param_info['base']}")
 
         self.emit(f"CALL {proc_name}")
 
@@ -366,6 +389,13 @@ class CodeGenerator:
         # Update Iterator
         self.emit(f"LOAD {iter_sym.mem_offset}")
         if down:
+            # If iter == limit, stop to avoid DEC saturation loops (limit may be 0).
+            self.emit("SWP b")
+            self.emit(f"LOAD {limit_sym.mem_offset}")
+            self.emit("SWP b")
+            self.emit("SUB b")
+            self.emit(f"JZERO {end_label}")
+            self.emit(f"LOAD {iter_sym.mem_offset}")
             self.emit("DEC a")
         else:
             self.emit("INC a")
@@ -459,55 +489,54 @@ class CodeGenerator:
     def gen_mul(self, node1, node2):
         # Result in r_a
         self.gen_expression(node1)
-        self.emit("SWP c") # Multiplier
+        self.emit("SWP c")  # multiplier
         self.gen_expression(node2)
-        self.emit("SWP d") # Multiplicand
-        self.emit("RST e") # Accumulator
-        
+        self.emit("SWP d")  # multiplicand
+        self.emit("RST e")  # accumulator
+
         start = f"mul_start_{id(node1)}"
         end = f"mul_end_{id(node1)}"
-        
+
         self.emit(f"{start}:", label=True)
-        # check c == 0
+        # if c == 0 => end
         self.emit("RST a")
         self.emit("ADD c")
         self.emit(f"JZERO {end}")
-        
-        # Check if c is odd: (c - (c/2)*2) > 0
-        self.emit("SWP a")
-        self.emit("SWP f") # f = c
-        self.emit("SHR a") # a = c/2
-        self.emit("SWP a") 
-        self.emit("SHL a") # a = (c/2)*2
-        self.emit("SWP b") 
+
+        # Check if c is odd: c - (c/2)*2
         self.emit("RST a")
-        self.emit("ADD f") 
-        self.emit("SUB b") # c - floor(c)
-        
+        self.emit("ADD c")
+        self.emit("SHR a")
+        self.emit("SHL a")
+        self.emit("SWP b")
+        self.emit("RST a")
+        self.emit("ADD c")
+        self.emit("SUB b")
+
         skip = f"mul_skip_{id(node1)}_{id(node2)}"
         self.emit(f"JZERO {skip}")
-        
-        # Add d to result
+
+        # e += d
         self.emit("RST a")
         self.emit("ADD e")
         self.emit("ADD d")
         self.emit("SWP e")
-        
+
         self.emit(f"{skip}:", label=True)
-        
+
         # d *= 2
         self.emit("RST a")
         self.emit("ADD d")
         self.emit("SHL a")
         self.emit("SWP d")
-        
+
         # c /= 2
         self.emit("RST a")
-        self.emit("ADD f")
+        self.emit("ADD c")
         self.emit("SHR a")
         self.emit("SWP c")
         self.emit(f"JUMP {start}")
-        
+
         self.emit(f"{end}:", label=True)
         self.emit("RST a")
         self.emit("ADD e")
