@@ -53,7 +53,7 @@ Used optimalisations:
 ## Building and running
 1. Compile the VM
 ```bash
-cd vm
+cd VM
 make
 ```
 
