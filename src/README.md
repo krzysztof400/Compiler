@@ -1,5 +1,32 @@
 # Imperative Language Compiler
 
+## Opis dla sprawdzajacego
+### Zależności
+- Python 3.8+
+- uv (https://pypi.org/project/uv/) - do zarządzania zależnościami i uruchamiania testów
+- lub zamiast uv można zainstalować SLY ręcznie
+
+### Uruchamianie kompilatora
+```bash
+uv run python compiler.py examples/programs/factorial.imp output.asm
+```
+lub bez uv:
+```bash
+python compiler.py examples/programs/factorial.imp output.asm
+```
+
+można użyć flagi -v do włączenia trybu verbose
+
+### Opis plików źródłowych
+Kompilator jest napisany w Pythonie 3. Kod jest podzielony na kilka modułów:
+- `lexer.py`: implementuje analizę leksykalną (tokenizację) źródłowego kodu programu.
+- `parser.py`: implementuje analizę składniową, tworząc strukturę instrukcji na podstawie tokenów. Implementuje gramatykę języka.
+- `semantic_analyzer.py`: implementuje analizę semantyczną, wyznacza ilość użytych komórek pamięci.
+- `code_generator.py`: generuje kod asemblerowy dla wirtualnej maszyny na podstawie struktury instrukcji.
+- `compiler.py`: główny plik uruchomieniowy kompilatora, który integruje wszystkie moduły i obsługuje wejście/wyjście.
+
+Przesłane pliki to pełna implementacja kompilatora. Oprócz tego w repozytorium znajdują się testy, których jednak zdecydowałem się nie przesyłać, aby nie zaśmiecać rozwiązania. 
+
 ## Project Description
 This project is a compiler for a simple imperative programming language. The compiler translates source code written in a defined complete high-level language (supporting procedures, FOR/WHILE/REPEAT loops, conditional statements, and arrays) into assembly code for a specific Virtual Machine (VM).
 

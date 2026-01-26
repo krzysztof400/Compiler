@@ -1,0 +1,15 @@
+PROGRAM IS
+  x, i, bound
+IN
+  # If strict BNF requires operations:
+  x := 1 + 0;
+
+  # Calculate limit explicitly before the loop
+  bound := x + 2;
+
+  # Use the variable 'bound' (which matches 'value')
+  FOR i FROM 1 TO bound DO
+    x := x + 1;
+    WRITE i;
+  ENDFOR
+END

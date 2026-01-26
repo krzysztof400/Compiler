@@ -1,0 +1,10 @@
+PROCEDURE init(O x) IS
+IN
+    WRITE x;
+END
+
+PROGRAM IS
+    v
+IN
+    init(v);
+END

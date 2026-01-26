@@ -1,0 +1,14 @@
+# Minimal repro for % and WHILE
+
+PROGRAM IS
+  a,b,r
+IN
+  a:=12;
+  b:=8;
+  WHILE b>0 DO
+    r:=a%b;
+    a:=b;
+    b:=r;
+  ENDWHILE
+  WRITE a;
+END

@@ -1,0 +1,10 @@
+PROGRAM IS
+    i, start, stop
+IN
+    start := 1;
+    stop := 5;
+    FOR i FROM start TO stop DO
+        i := i + 1;
+        WRITE i;
+    ENDFOR
+END
