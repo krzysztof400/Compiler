@@ -8,11 +8,11 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "example3.imp"
 
-from tests.helpers import compile_fixture_to_mr_path, extract_ints
+from tests.helpers import compile_fixture_to_mr_path, extract_ints, record_koszt
 
 
 @pytest.mark.parametrize("a", [1, 2, 5, 10, 26])
-def test_example3_outputs_fibonacci_26_in_straight_line_code(tmp_path: Path, a: int):
+def test_example3_outputs_fibonacci_26_in_straight_line_code(tmp_path: Path, a: int, request):
     """example3 computes Fibonacci numbers by explicitly unrolling additions.
 
     For input 'a', it builds the sequence up to F(26) and writes it.
@@ -32,6 +32,7 @@ def test_example3_outputs_fibonacci_26_in_straight_line_code(tmp_path: Path, a: 
     )
 
     assert proc.returncode == 0, proc.stderr.decode(errors="replace")
+    record_koszt(request, proc.stdout, proc.stderr)
 
     nums = extract_ints(proc.stdout)
     assert len(nums) >= 1

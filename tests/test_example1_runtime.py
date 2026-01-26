@@ -8,7 +8,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "example1.imp"
 
-from tests.helpers import compile_fixture_to_mr_path, extract_ints
+from tests.helpers import compile_fixture_to_mr_path, extract_ints, record_koszt
 
 
 def _gcd(a: int, b: int) -> int:
@@ -18,7 +18,7 @@ def _gcd(a: int, b: int) -> int:
 
 
 @pytest.mark.parametrize("m,n", [(12, 8), (21, 14), (13, 5)])
-def test_example1_terminates_and_outputs_gcd(tmp_path: Path, m: int, n: int):
+def test_example1_terminates_and_outputs_gcd(tmp_path: Path, m: int, n: int, request):
     mr_path = compile_fixture_to_mr_path(fixture_path=FIXTURE, tmp_path=tmp_path)
 
     vm = REPO_ROOT / "VM" / "maszyna-wirtualna"
@@ -32,6 +32,7 @@ def test_example1_terminates_and_outputs_gcd(tmp_path: Path, m: int, n: int):
     )
 
     assert proc.returncode == 0, proc.stderr.decode(errors="replace")
+    record_koszt(request, proc.stdout, proc.stderr)
 
     nums = extract_ints(proc.stdout, allow_negative=False)
     assert len(nums) >= 3

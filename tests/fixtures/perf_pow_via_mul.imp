@@ -1,0 +1,11 @@
+PROGRAM IS
+    base, exp, i, result
+IN
+    READ base;
+    READ exp;
+    result := 1;
+    FOR i FROM 1 TO exp DO
+        result := result * base;
+    ENDFOR
+    WRITE result;
+END

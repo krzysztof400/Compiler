@@ -8,7 +8,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "example7.imp"
 
-from tests.helpers import compile_fixture_to_mr_path, extract_ints
+from tests.helpers import compile_fixture_to_mr_path, extract_ints, record_koszt
 
 
 @pytest.mark.parametrize(
@@ -19,7 +19,7 @@ from tests.helpers import compile_fixture_to_mr_path, extract_ints
         (10, 20, 30),
     ],
 )
-def test_example7_nested_loops_accumulation(tmp_path: Path, a: int, b: int, c: int):
+def test_example7_nested_loops_accumulation(tmp_path: Path, a: int, b: int, c: int, request):
     """example7 is intended as a stress test for nested loops.
 
     It adds:
@@ -41,6 +41,7 @@ def test_example7_nested_loops_accumulation(tmp_path: Path, a: int, b: int, c: i
     )
 
     assert proc.returncode == 0, proc.stderr.decode(errors="replace")
+    record_koszt(request, proc.stdout, proc.stderr)
 
     nums = extract_ints(proc.stdout)
     assert len(nums) >= 3

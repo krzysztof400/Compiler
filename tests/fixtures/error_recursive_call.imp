@@ -1,0 +1,12 @@
+PROCEDURE selfcall(a) IS
+IN
+    a := a + 1;
+    selfcall(a);
+END
+
+PROGRAM IS
+    x
+IN
+    x := 1;
+    selfcall(x);
+END

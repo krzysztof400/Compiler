@@ -6,10 +6,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "exampleA.imp"
 
-from tests.helpers import compile_fixture_to_mr_path, extract_ints
+from tests.helpers import compile_fixture_to_mr_path, extract_ints, record_koszt
 
 
-def test_exampleA_array_indexing_and_arithmetic(tmp_path: Path):
+def test_exampleA_array_indexing_and_arithmetic(tmp_path: Path, request):
     """exampleA builds arrays ta,tb then uses them to fill tc and prints tc[0..24]."""
 
     mr_path = compile_fixture_to_mr_path(fixture_path=FIXTURE, tmp_path=tmp_path)
@@ -25,6 +25,7 @@ def test_exampleA_array_indexing_and_arithmetic(tmp_path: Path):
     )
 
     assert proc.returncode == 0, proc.stderr.decode(errors="replace")
+    record_koszt(request, proc.stdout, proc.stderr)
     nums = extract_ints(proc.stdout)
 
     # Recompute expected output from the program semantics.

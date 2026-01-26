@@ -8,7 +8,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "example2.imp"
 
-from tests.helpers import compile_fixture_to_mr_path, extract_ints
+from tests.helpers import compile_fixture_to_mr_path, extract_ints, record_koszt
 
 
 @pytest.mark.parametrize(
@@ -21,7 +21,7 @@ from tests.helpers import compile_fixture_to_mr_path, extract_ints
         (46368, 28657),
     ],
 )
-def test_example2_nested_procs_swap_even_times(tmp_path: Path, a: int, b: int):
+def test_example2_nested_procs_swap_even_times(tmp_path: Path, a: int, b: int, request):
     """example2 applies nested procedures that repeatedly transform (a,b).
 
     pa(a,b) computes: a := a + b; b := a - b
@@ -43,6 +43,7 @@ def test_example2_nested_procs_swap_even_times(tmp_path: Path, a: int, b: int):
     )
 
     assert proc.returncode == 0, proc.stderr.decode(errors="replace")
+    record_koszt(request, proc.stdout, proc.stderr)
 
     nums = extract_ints(proc.stdout)
     assert len(nums) >= 2

@@ -1,3 +1,6 @@
+from peephole_optimizer import peephole_optimize
+
+
 class CodeGenerator:
     def __init__(self, semantic_analyzer):
         self.analyzer = semantic_analyzer
@@ -21,7 +24,8 @@ class CodeGenerator:
         if self.verbose:
             for line in self.code:
                 print(line)
-        return self.resolve_labels()
+        resolved = self.resolve_labels()
+        return peephole_optimize(resolved)
 
     def emit(self, instr, label=False):
         if label:

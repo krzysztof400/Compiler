@@ -9,7 +9,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "example4.imp"
 
-from tests.helpers import compile_fixture_to_mr_path, extract_ints
+from tests.helpers import compile_fixture_to_mr_path, extract_ints, record_koszt
 
 
 @pytest.mark.parametrize(
@@ -22,7 +22,7 @@ from tests.helpers import compile_fixture_to_mr_path, extract_ints
         (10, 10),
     ],
 )
-def test_example4_binomial_coefficient(tmp_path: Path, n: int, k: int):
+def test_example4_binomial_coefficient(tmp_path: Path, n: int, k: int, request):
     mr_path = compile_fixture_to_mr_path(fixture_path=FIXTURE, tmp_path=tmp_path)
 
     vm = REPO_ROOT / "VM" / "maszyna-wirtualna"
@@ -36,6 +36,7 @@ def test_example4_binomial_coefficient(tmp_path: Path, n: int, k: int):
     )
 
     assert proc.returncode == 0, proc.stderr.decode(errors="replace")
+    record_koszt(request, proc.stdout, proc.stderr)
 
     nums = extract_ints(proc.stdout)
     assert len(nums) >= 1
