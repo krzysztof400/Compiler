@@ -8,6 +8,14 @@ class CodeGenerator:
         self.proc_ret_offsets = {}
         self.verbose = False
 
+    @staticmethod
+    def _is_power_of_two(value):
+        return value > 0 and (value & (value - 1)) == 0
+
+    @staticmethod
+    def _power_of_two_shift(value):
+        return value.bit_length() - 1
+
     def generate(self, ast):
         # AST: ('PROGRAM', procedures, main)
         _, procedures, main = ast
@@ -174,6 +182,12 @@ class CodeGenerator:
                 if is_number(left) and is_number(right):
                     self.gen_constant(left[1] * right[1])
                     return
+                if is_number(right) and self._is_power_of_two(right[1]):
+                    self.gen_expression(left)
+                    shift = self._power_of_two_shift(right[1])
+                    for _ in range(shift):
+                        self.emit("SHL a")
+                    return
                 self.gen_mul(node[1], node[2])
             elif tag == 'DIV':
                 left, right = node[1], node[2]
@@ -186,6 +200,12 @@ class CodeGenerator:
                 if is_number(right) and right[1] == 1:
                     self.gen_expression(left)
                     return
+                if is_number(right) and self._is_power_of_two(right[1]):
+                    self.gen_expression(left)
+                    shift = self._power_of_two_shift(right[1])
+                    for _ in range(shift):
+                        self.emit("SHR a")
+                    return
                 self.gen_div(node[1], node[2])
             elif tag == 'MOD':
                 left, right = node[1], node[2]
@@ -197,6 +217,21 @@ class CodeGenerator:
                     return
                 if is_number(right) and right[1] == 1:
                     self.gen_constant(0)
+                    return
+                if is_number(right) and self._is_power_of_two(right[1]):
+                    shift = self._power_of_two_shift(right[1])
+                    self.gen_expression(left)
+                    self.emit("SWP b")
+                    self.emit("RST a")
+                    self.emit("ADD b")
+                    for _ in range(shift):
+                        self.emit("SHR a")
+                    for _ in range(shift):
+                        self.emit("SHL a")
+                    self.emit("SWP c")
+                    self.emit("RST a")
+                    self.emit("ADD b")
+                    self.emit("SUB c")
                     return
                 self.gen_mod(node[1], node[2])
 
@@ -530,6 +565,12 @@ class CodeGenerator:
 
     def gen_mul(self, node1, node2):
         # Result in r_a
+        if isinstance(node2, tuple) and node2[0] == 'NUMBER' and self._is_power_of_two(node2[1]):
+            self.gen_expression(node1)
+            shift = self._power_of_two_shift(node2[1])
+            for _ in range(shift):
+                self.emit("SHL a")
+            return
         self.gen_expression(node1)
         self.emit("SWP c")  # multiplier
         self.gen_expression(node2)
@@ -679,5 +720,29 @@ class CodeGenerator:
         else:
             self.emit("ADD c")
 
-    def gen_div(self, n1, n2): self._gen_divmod(n1, n2, True)
-    def gen_mod(self, n1, n2): self._gen_divmod(n1, n2, False)
+    def gen_div(self, n1, n2):
+        if isinstance(n2, tuple) and n2[0] == 'NUMBER' and self._is_power_of_two(n2[1]):
+            self.gen_expression(n1)
+            shift = self._power_of_two_shift(n2[1])
+            for _ in range(shift):
+                self.emit("SHR a")
+            return
+        self._gen_divmod(n1, n2, True)
+
+    def gen_mod(self, n1, n2):
+        if isinstance(n2, tuple) and n2[0] == 'NUMBER' and self._is_power_of_two(n2[1]):
+            shift = self._power_of_two_shift(n2[1])
+            self.gen_expression(n1)
+            self.emit("SWP b")
+            self.emit("RST a")
+            self.emit("ADD b")
+            for _ in range(shift):
+                self.emit("SHR a")
+            for _ in range(shift):
+                self.emit("SHL a")
+            self.emit("SWP c")
+            self.emit("RST a")
+            self.emit("ADD b")
+            self.emit("SUB c")
+            return
+        self._gen_divmod(n1, n2, False)
