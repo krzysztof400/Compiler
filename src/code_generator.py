@@ -112,8 +112,13 @@ class CodeGenerator:
         self.analyzer.exit_scope()
 
     def visit_commands(self, commands):
-        for cmd in commands:
-            self.visit_command(cmd)
+        idx = 0
+        while idx < len(commands):
+            if self._maybe_emit_swap(commands, idx):
+                idx += 3
+                continue
+            self.visit_command(commands[idx])
+            idx += 1
 
     def visit_command(self, cmd):
         tag = cmd[0]
@@ -547,56 +552,141 @@ class CodeGenerator:
         op_map = {'EQUAL': 'EQ', 'NE': 'NEQ', 'NEQ': 'NEQ', 'LEQ': 'LE', 'GEQ': 'GE'}
         op = op_map.get(op, op)
 
-        self.gen_expression(node[1])
-        self.emit("SWP c")
-        self.gen_expression(node[2])
-        self.emit("SWP d")
+        def is_simple_operand(expr):
+            if not isinstance(expr, tuple):
+                return False
+            if expr[0] == 'NUMBER':
+                return True
+            if expr[0] == 'PIDENTIFIER':
+                sym = self.analyzer.visit_identifier(expr, enforce_checks=False)
+                return not getattr(sym, 'is_reference', False)
+            return False
 
-        # c = LHS, d = RHS
-        def check_diff(reg_x, reg_y):
-            # Returns a = max(reg_x - reg_y, 0)
-            self.emit("RST a")
-            self.emit(f"ADD {reg_x}")
-            self.emit(f"SUB {reg_y}")
+        def load_simple(expr, register):
+            if expr[0] == 'NUMBER':
+                self.gen_constant(expr[1], register=register)
+                return True
+            if expr[0] == 'PIDENTIFIER':
+                sym = self.analyzer.visit_identifier(expr, enforce_checks=False)
+                if getattr(sym, 'is_reference', False):
+                    return False
+                self.emit(f"LOAD {sym.mem_offset}")
+                if register == 'b':
+                    self.emit("SWP b")
+                return True
+            return False
+
+        def diff(lhs, rhs):
+            # Computes a = max(lhs - rhs, 0) using direct loads when possible.
+            if is_simple_operand(lhs) and is_simple_operand(rhs):
+                load_simple(rhs, 'b')
+                load_simple(lhs, 'a')
+                self.emit("SUB b")
+                return
+            self.gen_expression(rhs)
+            self.emit("SWP c")
+            self.gen_expression(lhs)
+            self.emit("SUB c")
 
         if op == 'EQ':
-            # False if c != d. (c > d OR d > c)
-            check_diff('c', 'd') # c - d
+            # False if lhs != rhs (lhs > rhs or rhs > lhs)
+            diff(node[1], node[2])  # lhs - rhs
             self.emit(f"JPOS {jump_target_if_false}")
-            check_diff('d', 'c') # d - c
+            diff(node[2], node[1])  # rhs - lhs
             self.emit(f"JPOS {jump_target_if_false}")
 
         elif op == 'NEQ':
-            # False if c == d.
-            # If c != d, we must NOT jump.
+            # False if lhs == rhs
             true_label = f"cond_true_{id(node)}"
-            check_diff('c', 'd')
-            self.emit(f"JPOS {true_label}") # c > d, true, skip jump
-            check_diff('d', 'c')
-            self.emit(f"JPOS {true_label}") # d > c, true, skip jump
-            self.emit(f"JUMP {jump_target_if_false}") # Equal
+            diff(node[1], node[2])
+            self.emit(f"JPOS {true_label}")
+            diff(node[2], node[1])
+            self.emit(f"JPOS {true_label}")
+            self.emit(f"JUMP {jump_target_if_false}")
             self.emit(f"{true_label}:", label=True)
 
         elif op == 'LT':
-            # True if d - c > 0, False otherwise
-            check_diff('d', 'c')
+            # True if rhs - lhs > 0
+            diff(node[2], node[1])
             self.emit(f"JZERO {jump_target_if_false}")
 
         elif op == 'GT':
-            # c > d. False if c <= d.
-            # True only if c - d > 0.
-            check_diff('c', 'd')
+            # True if lhs - rhs > 0
+            diff(node[1], node[2])
             self.emit(f"JZERO {jump_target_if_false}")
 
         elif op == 'LE':
-            # c <= d. False if c > d.
-            check_diff('c', 'd')
+            # False if lhs - rhs > 0
+            diff(node[1], node[2])
             self.emit(f"JPOS {jump_target_if_false}")
 
         elif op == 'GE':
-            # c >= d. False if d > c.
-            check_diff('d', 'c')
+            # False if rhs - lhs > 0
+            diff(node[2], node[1])
             self.emit(f"JPOS {jump_target_if_false}")
+
+    def _maybe_emit_swap(self, commands, start_index):
+        if start_index + 2 >= len(commands):
+            return False
+
+        cmd1, cmd2, cmd3 = commands[start_index:start_index + 3]
+        if cmd1[0] != 'ASSIGN' or cmd2[0] != 'ASSIGN' or cmd3[0] != 'ASSIGN':
+            return False
+
+        target_x, expr1 = cmd1[1], cmd1[2]
+        target_y, expr2 = cmd2[1], cmd2[2]
+        target_x2, expr3 = cmd3[1], cmd3[2]
+
+        def is_simple_identifier(node):
+            return isinstance(node, tuple) and node[0] == 'PIDENTIFIER'
+
+        def same_identifier(lhs, rhs):
+            if not (is_simple_identifier(lhs) and is_simple_identifier(rhs)):
+                return False
+            return lhs[1] == rhs[1]
+
+        if not (is_simple_identifier(target_x) and is_simple_identifier(target_y) and is_simple_identifier(target_x2)):
+            return False
+        if same_identifier(target_x, target_y):
+            return False
+        if not same_identifier(target_x, target_x2):
+            return False
+
+        def is_add_xy(expr, x, y):
+            if not (isinstance(expr, tuple) and expr[0] == 'ADD'):
+                return False
+            left, right = expr[1], expr[2]
+            return (same_identifier(left, x) and same_identifier(right, y)) or (
+                same_identifier(left, y) and same_identifier(right, x)
+            )
+
+        def is_sub_xy(expr, x, y):
+            if not (isinstance(expr, tuple) and expr[0] == 'SUB'):
+                return False
+            return same_identifier(expr[1], x) and same_identifier(expr[2], y)
+
+        if not is_add_xy(expr1, target_x, target_y):
+            return False
+        if not is_sub_xy(expr2, target_x, target_y):
+            return False
+        if not is_sub_xy(expr3, target_x, target_y):
+            return False
+
+        sym_x = self.analyzer.get_symbol(target_x[1])
+        sym_y = self.analyzer.get_symbol(target_y[1])
+        if getattr(sym_x, 'is_array', False) or getattr(sym_y, 'is_array', False):
+            return False
+        if getattr(sym_x, 'is_reference', False) or getattr(sym_y, 'is_reference', False):
+            return False
+
+        # Emit direct swap: x <-> y
+        self.emit(f"LOAD {sym_x.mem_offset}")
+        self.emit("SWP b")
+        self.emit(f"LOAD {sym_y.mem_offset}")
+        self.emit(f"STORE {sym_x.mem_offset}")
+        self.emit("SWP b")
+        self.emit(f"STORE {sym_y.mem_offset}")
+        return True
 
     # --- MATH (Logarithmic Time) ---
 
