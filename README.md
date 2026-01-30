@@ -10,7 +10,7 @@ Specification of VM can be found in [vm_spec](vm_spec.md)
 The compiler operates in several phases:
 ### 1. Lexical Analysis (Lexer): Source code is divided into tokens (keywords, identifiers, numbers).
 ### 2. Syntax Analysis (Parser): Tokens are matched against grammar rules to create an instruction structure or tree. Structural correctness is verified at this stage.
-### 3. Semantic Analysis and Code Generation:
+### 3. Abstract Syntax Trees:
 - Variable scopes and type correctness are checked.
 - Assembly code for the register machine is generated.
 - Complex mathematical operations (multiplication/division) are expanded into bitwise algorithms (using SHL, SHR shifts) to ensure logarithmic complexity.
